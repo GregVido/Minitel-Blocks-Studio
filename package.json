@@ -2,7 +2,7 @@
   "name": "minitel-blocks-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "Interface educative en blocs pour programmer un ESP32 qui pilote un Minitel.",
+  "description": "Interface éducative en blocs pour programmer un ESP32 qui pilote un Minitel.",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -11,7 +11,10 @@
     "start": "electron .",
     "build": "tsc && vite build --configLoader runner",
     "preview": "npm run build && node scripts/serve-dist.cjs",
-    "serve": "node scripts/serve-dist.cjs"
+    "serve": "node scripts/serve-dist.cjs",
+    "pack": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist": "npm run dist:win"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -23,7 +26,59 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
     "typescript": "^5.6.3",
     "vite": "^6.0.5"
+  },
+  "author": "fifou",
+  "license": "Apache-2.0",
+  "build": {
+    "appId": "fr.fifou.minitel-blocks-studio",
+    "productName": "Minitel Blocks Studio",
+    "copyright": "Copyright © 2026 fifou",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json",
+      "logo.png"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources"
+      },
+      {
+        "from": "logo.png",
+        "to": "logo.png"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Minitel Blocks Studio",
+      "runAfterFinish": true,
+      "license": "LICENSE"
+    }
   }
 }

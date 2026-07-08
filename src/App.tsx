@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from "react";
-import Blocks from "lucide-react/dist/esm/icons/blocks.js";
+import appLogo from "../logo.png";
 import Braces from "lucide-react/dist/esm/icons/braces.js";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
 import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
@@ -2006,7 +2006,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-mark"><Blocks size={30} /></div>
+        <div className="brand-mark"><img src={appLogo} alt="" /></div>
         <div className="brand-copy">
           <h1>Minitel Blocks Studio</h1>
           <p>ESP32 + Minitel en blocs visuels</p>

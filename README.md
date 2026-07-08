@@ -1,95 +1,64 @@
 # Minitel Blocks Studio
 
-Minitel Blocks Studio est une application Electron + React pour programmer un ESP32 qui pilote un Minitel avec des blocs visuels, dans l'esprit de Scratch. L'objectif est simple : permettre de créer des écrans, des interactions clavier, des boucles, des variables et des sons sans avoir besoin d'écrire du C++.
+Minitel Blocks Studio permet de créer un programme pour un ESP32 qui pilote un Minitel, avec des blocs visuels faciles à assembler. Pas besoin de connaître le code : tu construis ton comportement avec des actions comme afficher du texte, changer les couleurs, réagir aux touches, faire des boucles ou utiliser des variables.
 
 ![Minitel Blocks Studio](public/logo.png)
 
-## Fonctionnalités
+## Installer l'application
 
-- Éditeur de blocs empilables, colorés et imbriqués.
-- Blocs de démarrage, boucle, clavier, texte, couleurs, son, graphismes, variables, conditions et boucles.
-- Variables utilisables dans les blocs, par exemple pour faire un bip plusieurs fois ou placer du texte à une position calculée.
-- Opérations visuelles : nombres, variables, calculs et comparaisons.
-- Simulation Minitel intégrée avec écran 40 x 24, touches simulées, variables et mode pas à pas.
-- Annulation et rétablissement avec boutons, `Ctrl+Z`, `Ctrl+Y` et `Ctrl+Shift+Z`.
-- Génération automatique du code ESP32 / Arduino.
-- Téléversement direct vers l'ESP32 depuis l'application, sans ouvrir Arduino IDE.
-- Installateur Windows `.exe` généré automatiquement par GitHub Actions.
+1. Télécharge le fichier d'installation Windows dans la page **Releases** du projet.
+2. Lance le fichier `Minitel Blocks Studio-Setup-0.1.0.exe`.
+3. Suis l'installation.
+4. Ouvre **Minitel Blocks Studio** depuis le menu Démarrer ou le raccourci du bureau.
 
-## Installation pour utiliser l'application
+## Créer un programme
 
-1. Va dans l'onglet **Actions** ou **Releases** du dépôt GitHub.
-2. Télécharge l'artefact ou le fichier `Minitel Blocks Studio-Setup-0.1.0.exe`.
-3. Lance l'installateur Windows.
-4. Ouvre **Minitel Blocks Studio** depuis le menu Démarrer ou le raccourci bureau.
+L'écran principal est divisé en trois zones :
 
-L'application embarque l'interface, la bibliothèque `MinitelESP32` et la logique de génération du projet PlatformIO temporaire.
+- à gauche, la liste des blocs disponibles ;
+- au centre, l'espace où tu construis ton programme ;
+- à droite, la simulation, le code généré et l'envoi vers l'ESP32.
 
-## Téléverser sur un ESP32
+Pour construire un programme, prends un bloc à gauche puis dépose-le dans l'espace central. Les blocs peuvent être empilés, déplacés, supprimés, copiés et imbriqués dans des boucles ou des conditions.
 
-1. Branche l'ESP32 en USB.
-2. Ouvre l'onglet **ESP32** dans l'application.
-3. Choisis la carte si nécessaire : `ESP32 Dev Module`, `NodeMCU-32S` ou `DOIT ESP32 DevKit V1`.
-4. Laisse le port sur `auto` ou renseigne un port comme `COM3`.
+## Tester avec la simulation
+
+L'onglet **Simulation** affiche un Minitel virtuel. Il permet de vérifier ton programme avant de l'envoyer sur l'ESP32.
+
+Tu peux :
+
+- cliquer sur **Lancer** pour faire tourner la simulation ;
+- cliquer sur **Pas** pour avancer étape par étape ;
+- cliquer sur **Reset** pour repartir de zéro ;
+- choisir une touche, puis cliquer sur **Tester** ;
+- appuyer directement sur une touche du clavier, par exemple `A`, `B`, `Entrée` ou `Retour`.
+
+Si ton programme contient un bloc du type **quand la touche A**, l'action se déclenche quand tu testes cette touche ou quand tu appuies sur `A` au clavier.
+
+## Envoyer sur l'ESP32
+
+1. Branche ton ESP32 en USB.
+2. Ouvre l'onglet **ESP32**.
+3. Choisis le modèle de carte si nécessaire.
+4. Laisse le port sur **auto**, ou choisis le port si tu le connais.
 5. Clique sur **Envoyer à l'ESP32**.
 
-Le premier téléversement peut télécharger les outils ESP32 et préparer un environnement PlatformIO privé dans les données de l'application. Arduino IDE n'est pas nécessaire. Une connexion Internet peut être nécessaire au premier téléversement, et Windows peut demander un pilote USB selon la puce de la carte ESP32.
+La première fois, l'application peut avoir besoin d'Internet pour préparer les outils d'envoi. Selon ta carte ESP32, Windows peut aussi demander un pilote USB.
 
-## Build automatique GitHub
+## Raccourcis utiles
 
-Le workflow [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) construit l'application à chaque push sur `main` ou `master` :
+- `Ctrl+Z` : annuler.
+- `Ctrl+Y` : rétablir.
+- `Ctrl+Shift+Z` : rétablir aussi.
+- Dans la simulation, appuie sur une touche du clavier pour la tester.
 
-1. installation des dépendances avec `npm ci` ;
-2. build React / TypeScript avec des chemins compatibles avec l'application installée ;
-3. génération de l'installateur Windows `.exe` sans publication automatique parasite ;
-4. publication de l'exe comme artefact GitHub Actions.
+## Conseils
 
-Quand une GitHub Release est créée, l'installateur est aussi attaché automatiquement à la release.
-
-## Développement local
-
-Prérequis :
-
-- Node.js 24 recommandé, Node.js 22.12 minimum ;
-- Windows pour générer l'installateur Windows ;
-- une connexion Internet pour installer les dépendances et, au premier téléversement, les outils ESP32.
-
-Commandes utiles :
-
-```powershell
-npm install
-npm run dev
-```
-
-Construire seulement React :
-
-```powershell
-npm run build
-```
-
-Générer l'installateur Windows :
-
-```powershell
-npm run dist:win
-```
-
-Ou avec le script pratique :
-
-```powershell
-.\build-windows.ps1
-```
-
-Le fichier final est créé dans le dossier `release/`.
-
-## Structure du projet
-
-- `src/` : interface React et logique des blocs.
-- `electron/` : fenêtre Electron, export de sketch et téléversement ESP32.
-- `resources/MinitelESP32/` : bibliothèque C++ utilisée par le projet généré.
-- `build/` : icônes utilisées par l'installateur.
-- `.github/workflows/` : build automatique de l'exe Windows.
-- `release/` : sortie locale de l'installateur, ignorée par Git.
+- Commence avec le programme exemple pour comprendre le fonctionnement.
+- Utilise la simulation avant d'envoyer sur l'ESP32.
+- Si l'envoi échoue, vérifie le câble USB, le port choisi et le modèle de carte.
+- Si rien ne s'affiche sur le Minitel, vérifie le branchement entre l'ESP32 et le Minitel.
 
 ## Licence
 
-Ce projet est distribué sous licence Apache-2.0. Voir [LICENSE](LICENSE).
+Minitel Blocks Studio est distribué sous licence Apache-2.0.

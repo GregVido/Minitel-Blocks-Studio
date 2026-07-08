@@ -1006,18 +1006,24 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[]) {
   const state = createPreviewState(variables);
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
-  const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || (stack.event.definitionId === "event-key-char" && previewKeyMatches(stack.event.values.key, previewKey)));
+  const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
   setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
   for (let turn = 0; turn < loopCount; turn += 1) {
-    keyStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
     loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
   }
+
+  simulatedKeys.slice(-12).forEach((key) => {
+    state.messages.push("Touche " + (key === "Enter" ? "Entrée" : key === "Backspace" ? "Retour" : key));
+    keyStacks
+      .filter((stack) => stack.event.definitionId === "event-key-any" || previewKeyMatches(stack.event.values.key, key))
+      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key));
+  });
 
   state.messages.push("Tour " + loopCount);
   return state;
@@ -1590,6 +1596,7 @@ function App() {
   const [simRunning, setSimRunning] = useState(false);
   const [simTick, setSimTick] = useState(0);
   const [simSpeed, setSimSpeed] = useState(550);
+  const [simulatedKeys, setSimulatedKeys] = useState<string[]>([]);
   const motionTimersRef = useRef<Record<string, number>>({});
   const deleteTimersRef = useRef<number[]>([]);
   const [board, setBoard] = useState("esp32dev");
@@ -1600,7 +1607,7 @@ function App() {
   const activeStackId = selectedStackId || stacks[0]?.id || "";
   const activeBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables), [stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick), [stacks, variables, previewKey, simTick]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys), [stacks, variables, previewKey, simTick, simulatedKeys]);
 
   function flashNotice(message: string) {
     setNotice(message);
@@ -1661,6 +1668,7 @@ function App() {
     setSelectedStackId((current) => (next.stacks.some((stack) => stack.id === current) ? current : next.stacks[0]?.id || ""));
     setSimRunning(false);
     setSimTick(0);
+    setSimulatedKeys([]);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)).slice(0, 40), "history-flash"), 0);
   }
 
@@ -1682,6 +1690,22 @@ function App() {
     flashNotice("Action rétablie");
   }
 
+  function triggerSimulatedKey(key: string) {
+    const normalizedKey = key.length === 1 ? key.toUpperCase() : key;
+    if (!keyOptions.some((option) => option.value === normalizedKey)) return;
+    setRightTab("preview");
+    setPreviewKey(normalizedKey);
+    setSimulatedKeys((current) => [...current.slice(-11), normalizedKey]);
+    setSimTick((current) => current + 1);
+    flashNotice("Touche " + (normalizedKey === "Enter" ? "Entrée" : normalizedKey === "Backspace" ? "Retour" : normalizedKey) + " simulée");
+  }
+
+  function resetSimulation() {
+    setSimRunning(false);
+    setSimTick(0);
+    setSimulatedKeys([]);
+  }
+
   useEffect(() => {
     if (!simRunning) return undefined;
     const timer = window.setInterval(() => setSimTick((current) => current + 1), simSpeed);
@@ -1693,22 +1717,31 @@ function App() {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
       const isTyping = target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
-      if (isTyping || !(event.ctrlKey || event.metaKey)) return;
+      if (isTyping) return;
 
-      const key = event.key.toLowerCase();
-      if (key === "z") {
-        event.preventDefault();
-        if (event.shiftKey) redo();
-        else undo();
+      if (event.ctrlKey || event.metaKey) {
+        const key = event.key.toLowerCase();
+        if (key === "z") {
+          event.preventDefault();
+          if (event.shiftKey) redo();
+          else undo();
+        }
+        if (key === "y") {
+          event.preventDefault();
+          redo();
+        }
+        return;
       }
-      if (key === "y") {
+
+      const simulatedKey = event.key === "Enter" || event.key === "Backspace" ? event.key : event.key.length === 1 ? event.key.toUpperCase() : "";
+      if (rightTab === "preview" && keyOptions.some((option) => option.value === simulatedKey)) {
         event.preventDefault();
-        redo();
+        triggerSimulatedKey(simulatedKey);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [history, stacks, variables]);
+  }, [history, stacks, variables, rightTab]);
 
   useEffect(() => {
     return () => {
@@ -1916,6 +1949,7 @@ function App() {
     setSelectedStackId(next[0].id);
     setSimRunning(false);
     setSimTick(0);
+    setSimulatedKeys([]);
     window.setTimeout(() => animateBlock(collectBlockIds(next.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice("Nouveau programme");
   }
@@ -1929,6 +1963,7 @@ function App() {
     setSelectedStackId(next[0].id);
     setSimRunning(false);
     setSimTick(0);
+    setSimulatedKeys([]);
     window.setTimeout(() => animateBlock(collectBlockIds(next.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice("Exemple chargé");
   }
@@ -2086,7 +2121,8 @@ function App() {
               <div className="simulation-panel">
                 <button type="button" className={"sim-button " + (simRunning ? "active" : "")} onClick={() => setSimRunning((current) => !current)} title={simRunning ? "Mettre en pause" : "Lancer la simulation"}>{simRunning ? <Pause size={16} /> : <Play size={16} />}<span>{simRunning ? "Pause" : "Lancer"}</span></button>
                 <button type="button" className="sim-button" onClick={() => setSimTick((current) => current + 1)} title="Avancer d'un tour"><StepForward size={16} /><span>Pas</span></button>
-                <button type="button" className="sim-button" onClick={() => { setSimRunning(false); setSimTick(0); }} title="Remettre la simulation à zéro"><RotateCcw size={16} /><span>Reset</span></button>
+                <button type="button" className="sim-button" onClick={resetSimulation} title="Remettre la simulation à zéro"><RotateCcw size={16} /><span>Reset</span></button>
+                <button type="button" className="sim-button key-test" onClick={() => triggerSimulatedKey(previewKey)} title="Tester la touche sélectionnée"><Keyboard size={16} /><span>Tester {previewKey === "Enter" ? "Entrée" : previewKey === "Backspace" ? "Retour" : previewKey}</span></button>
                 <label className="speed-control"><span>{simSpeed} ms</span><input type="range" min="150" max="1200" step="50" value={simSpeed} onChange={(event) => setSimSpeed(Number(event.target.value))} /></label>
                 <div className="sim-counter">Tour {Math.max(1, Math.min(12, simTick + 1))}</div>
               </div>

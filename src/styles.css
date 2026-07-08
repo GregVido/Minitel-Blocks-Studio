@@ -1613,3 +1613,56 @@ button {
     grid-column: span 3;
   }
 }
+
+
+/* Simulation layout fix */
+.preview-panel {
+  overflow: hidden auto;
+  padding-right: 2px;
+}
+
+.preview-toolbar {
+  flex-wrap: wrap;
+}
+
+.simulation-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  overflow: visible;
+}
+
+.sim-button {
+  flex: 1 1 88px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.sim-button.key-test {
+  flex: 1 1 132px;
+}
+
+.speed-control {
+  flex: 1 1 150px;
+  min-width: 130px;
+}
+
+.sim-counter {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+@media (max-width: 1320px) {
+  .sim-button span,
+  .speed-control span {
+    font-size: 12px;
+  }
+
+  .simulation-panel {
+    padding: 9px;
+  }
+}

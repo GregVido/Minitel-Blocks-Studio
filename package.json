@@ -12,8 +12,8 @@
     "build": "tsc && vite build --configLoader runner",
     "preview": "npm run build && node scripts/serve-dist.cjs",
     "serve": "node scripts/serve-dist.cjs",
-    "pack": "npm run build && electron-builder --dir",
-    "dist:win": "npm run build && electron-builder --win nsis",
+    "pack": "npm run build && electron-builder --dir --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --publish never",
     "dist": "npm run dist:win"
   },
   "dependencies": {
@@ -80,5 +80,8 @@
       "runAfterFinish": true,
       "license": "LICENSE"
     }
+  },
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

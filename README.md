@@ -40,8 +40,8 @@ Le premier téléversement peut télécharger les outils ESP32 et préparer un e
 Le workflow [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) construit l'application à chaque push sur `main` ou `master` :
 
 1. installation des dépendances avec `npm ci` ;
-2. build React / TypeScript ;
-3. génération de l'installateur Windows `.exe` ;
+2. build React / TypeScript avec des chemins compatibles avec l'application installée ;
+3. génération de l'installateur Windows `.exe` sans publication automatique parasite ;
 4. publication de l'exe comme artefact GitHub Actions.
 
 Quand une GitHub Release est créée, l'installateur est aussi attaché automatiquement à la release.
@@ -50,7 +50,7 @@ Quand une GitHub Release est créée, l'installateur est aussi attaché automati
 
 Prérequis :
 
-- Node.js 20 ou plus récent ;
+- Node.js 24 recommandé, Node.js 22.12 minimum ;
 - Windows pour générer l'installateur Windows ;
 - une connexion Internet pour installer les dépendances et, au premier téléversement, les outils ESP32.
 

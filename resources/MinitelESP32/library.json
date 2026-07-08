@@ -1,0 +1,6 @@
+{
+  "name": "MinitelESP32",
+  "version": "0.1.0",
+  "framework": "arduino",
+  "platforms": "espressif32"
+}

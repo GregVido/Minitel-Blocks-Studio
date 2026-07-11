@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type PointerEvent } from "react";
 import appLogo from "../logo.png";
 import Braces from "lucide-react/dist/esm/icons/braces.js";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
@@ -36,12 +36,27 @@ import Usb from "lucide-react/dist/esm/icons/usb.js";
 import Variable from "lucide-react/dist/esm/icons/variable.js";
 import Volume2 from "lucide-react/dist/esm/icons/volume-2.js";
 import Wand2 from "lucide-react/dist/esm/icons/wand-2.js";
+import X from "lucide-react/dist/esm/icons/x.js";
 import type { LucideIcon } from "lucide-react";
+import {
+  ScreenDesigner,
+  createDefaultScreenConfig,
+  elementDimensions,
+  fitElementsToScreen,
+  makeSceneBox,
+  makeSceneImage,
+  makeSceneText,
+  mosaicBits,
+  type MinitelScreenConfig,
+  type SceneElement,
+  type SceneImageElement,
+} from "./screen-designer";
 
 type BlockKind = "event" | "action" | "control" | "value";
 type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition";
 type ExprType = "number" | "boolean" | "text";
 type RightTab = "preview" | "code" | "upload";
+type WorkspaceMode = "blocks" | "designer";
 
 type SelectOption = {
   label: string;
@@ -136,6 +151,8 @@ type VariableDef = {
 type ProjectSnapshot = {
   stacks: ScriptStack[];
   variables: VariableDef[];
+  screenConfig: MinitelScreenConfig;
+  sceneElements: SceneElement[];
 };
 
 type HistoryState = {
@@ -164,6 +181,31 @@ type DragPayload =
   | { source: "workspace"; stackId: string; blockId: string }
   | { source: "stack"; stackId: string };
 
+type DragPreviewState = {
+  title: string;
+  helper: string;
+  color: string;
+  shape: "brick" | "event-hat" | "c-block";
+  x: number;
+  y: number;
+};
+
+type PendingPointerDrag = {
+  payload: DragPayload;
+  title: string;
+  helper: string;
+  color: string;
+  shape: DragPreviewState["shape"];
+  startX: number;
+  startY: number;
+  started: boolean;
+  sourceBlockId?: string;
+  sourcePaletteId?: string;
+  sourceStackId?: string;
+  pointerId: number;
+  sourceElement: HTMLElement;
+};
+
 type PreviewCell = {
   char: string;
   fg: string;
@@ -172,6 +214,8 @@ type PreviewCell = {
 
 type PreviewState = {
   cells: PreviewCell[];
+  columns: number;
+  rows: number;
   cursorColumn: number;
   cursorRow: number;
   fg: string;
@@ -196,13 +240,23 @@ type CategoryStyle = CSSProperties & {
   "--category-color": string;
 };
 
+type DragPreviewStyle = CSSProperties & {
+  "--block-color": string;
+};
+
 type CodeContext = {
   keyVariable?: string;
 };
 
+type ProjectExample = {
+  id: string;
+  name: string;
+  description: string;
+  accent: string;
+  create: () => ProjectSnapshot;
+};
+
 const DRAG_TYPE = "application/minitel-block";
-const SCREEN_COLUMNS = 40;
-const SCREEN_ROWS = 24;
 const DELETE_ANIMATION_MS = 260;
 const BLOCK_MOTION_MS = 430;
 const HISTORY_LIMIT = 80;
@@ -528,6 +582,145 @@ function createBlankStacks() {
   return [makeStack("event-setup", [makeBlock("reset-display")])];
 }
 
+function createMenuStacks() {
+  const aStack = makeStack("event-key-char", [
+    { ...makeBlock("set-colors"), values: { fg: "Yellow", bg: "Black" } },
+    { ...makeBlock("print-at"), values: { column: num(4), row: num(16), text: "Tu as choisi : JOUER   " } },
+    { ...makeBlock("beep"), values: { times: num(2), gap: num(90) } },
+  ]);
+  aStack.event.values.key = "A";
+  const bStack = makeStack("event-key-char", [
+    { ...makeBlock("set-colors"), values: { fg: "Cyan", bg: "Black" } },
+    { ...makeBlock("print-at"), values: { column: num(4), row: num(16), text: "Tu as choisi : AIDE    " } },
+  ]);
+  bStack.event.values.key = "B";
+  return [
+    makeStack("event-setup", [
+      makeBlock("reset-display"),
+      { ...makeBlock("set-colors"), values: { fg: "White", bg: "Blue" } },
+      { ...makeBlock("print-at"), values: { column: num(4), row: num(4), text: "MENU MINITEL" } },
+      { ...makeBlock("set-colors"), values: { fg: "Cyan", bg: "Black" } },
+      { ...makeBlock("print-at"), values: { column: num(5), row: num(9), text: "A - Jouer" } },
+      { ...makeBlock("print-at"), values: { column: num(5), row: num(11), text: "B - Aide" } },
+    ]),
+    aStack,
+    bStack,
+  ];
+}
+
+function createCounterStacks() {
+  return [
+    makeStack("event-setup", [
+      makeBlock("reset-display"),
+      { ...makeBlock("var-set"), values: { variable: "compteur", value: num(0) } },
+      { ...makeBlock("foreground"), values: { color: "Cyan" } },
+      { ...makeBlock("print-at"), values: { column: num(4), row: num(5), text: "COMPTEUR ANIME" } },
+    ]),
+    makeStack("event-loop", [
+      { ...makeBlock("var-change"), values: { variable: "compteur", delta: num(1) } },
+      { ...makeBlock("set-colors"), values: { fg: "Yellow", bg: "Black" } },
+      { ...makeBlock("print-at"), values: { column: num(8), row: num(11), text: "Valeur :" } },
+      { ...makeBlock("var-show"), values: { variable: "compteur", column: num(18), row: num(11) } },
+      { ...makeBlock("wait"), values: { ms: num(500) } },
+    ]),
+  ];
+}
+
+function createKeyboardStacks() {
+  return [
+    makeStack("event-setup", [
+      makeBlock("reset-display"),
+      { ...makeBlock("foreground"), values: { color: "Green" } },
+      { ...makeBlock("print-at"), values: { column: num(3), row: num(4), text: "TESTEUR DE CLAVIER" } },
+      { ...makeBlock("print-at"), values: { column: num(3), row: num(8), text: "Appuie sur une touche" } },
+    ]),
+    makeStack("event-key-any", [
+      { ...makeBlock("set-colors"), values: { fg: "Yellow", bg: "Blue" } },
+      { ...makeBlock("print-at"), values: { column: num(3), row: num(14), text: "Touche recue :" } },
+      { ...makeBlock("show-key"), values: { column: num(20), row: num(14) } },
+      { ...makeBlock("beep"), values: { times: num(1), gap: num(60) } },
+    ]),
+  ];
+}
+
+function createPixelDemoBitmap(cellWidth: number, cellHeight: number) {
+  const width = cellWidth * 2;
+  const height = cellHeight * 3;
+  let bitmap = "";
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const nx = (x - width / 2) / (width / 2);
+      const ny = (y - height / 2) / (height / 2);
+      const ring = nx * nx + ny * ny;
+      const eye = (Math.abs(nx - 0.34) < 0.1 || Math.abs(nx + 0.34) < 0.1) && Math.abs(ny + 0.25) < 0.12;
+      const smile = ny > 0.1 && ny < 0.5 && Math.abs(ring - 0.42) < 0.09;
+      bitmap += ring > 0.75 && ring < 1.05 || eye || smile ? "1" : "0";
+    }
+  }
+  return bitmap;
+}
+
+function defaultProjectVariables() {
+  return createDefaultVariables();
+}
+
+const projectExamples: ProjectExample[] = [
+  {
+    id: "discover",
+    name: "Découverte",
+    description: "Texte, couleurs, variables, répétition et touche A dans un projet prêt à explorer.",
+    accent: "#2785ff",
+    create: () => ({ stacks: createExampleStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+  },
+  {
+    id: "menu",
+    name: "Menu interactif",
+    description: "Un vrai petit menu piloté avec les touches A et B du Minitel.",
+    accent: "#e14d72",
+    create: () => ({ stacks: createMenuStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+  },
+  {
+    id: "counter",
+    name: "Compteur animé",
+    description: "Une variable évolue automatiquement et sa valeur apparaît à l'écran.",
+    accent: "#ff9f1c",
+    create: () => ({ stacks: createCounterStacks(), variables: [{ id: uid(), name: "compteur", defaultValue: num(0) }], screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+  },
+  {
+    id: "keyboard",
+    name: "Clavier sonore",
+    description: "Chaque touche reçue s'affiche et déclenche un bip.",
+    accent: "#18a058",
+    create: () => ({ stacks: createKeyboardStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+  },
+  {
+    id: "poster",
+    name: "Affiche visuelle",
+    description: "Une composition créée dans le mode Écran avec titre, cadre et pixel art.",
+    accent: "#16a6b6",
+    create: () => {
+      const config = createDefaultScreenConfig();
+      const imageWidth = 10;
+      const imageHeight = 8;
+      return {
+        stacks: [makeStack("event-setup", [makeBlock("reset-display")])],
+        variables: defaultProjectVariables(),
+        screenConfig: config,
+        sceneElements: [
+          makeSceneBox(2, 2, 37, 21, "Cyan", false),
+          makeSceneText("MINITEL STUDIO", 7, 4, "Yellow", "DoubleWidth"),
+          makeSceneText("Dessine ton ecran sans coder", 7, 19, "White"),
+          makeSceneImage("Sourire", 15, 8, imageWidth, imageHeight, createPixelDemoBitmap(imageWidth, imageHeight), "Green"),
+        ],
+      };
+    },
+  },
+];
+
+function createInitialProject() {
+  return projectExamples[0].create();
+}
+
 function exprCode(value: InputValue | undefined, fallback: Expr = num(0)): string {
   const expr = isExpr(value) ? value : fallback;
   switch (expr.kind) {
@@ -785,12 +978,60 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
   });
 }
 
-function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[]) {
+function appendSceneCode(lines: string[], elements: SceneElement[], indent: number) {
+  if (elements.length === 0) return;
+  pushLine(lines, indent, "// Composition créée dans le mode Écran");
+  elements.forEach((element) => {
+    if (element.kind === "text") {
+      pushLine(lines, indent, "minitel.colors(MinitelESP32::Color::" + element.fg + ", MinitelESP32::Color::" + element.bg + ");");
+      pushLine(lines, indent, "minitel.setTextSize(MinitelESP32::TextSize::" + element.size + ");");
+      pushLine(lines, indent, "minitel.moveTo(" + element.x + ", " + element.y + ");");
+      pushLine(lines, indent, "minitel.sendText(" + cppString(element.text) + ");");
+      pushLine(lines, indent, "minitel.setTextSize(MinitelESP32::TextSize::Normal);");
+      return;
+    }
+
+    pushLine(lines, indent, "minitel.foreground(MinitelESP32::Color::" + element.fg + ");");
+    pushLine(lines, indent, "minitel.graphicMode();");
+    if (element.kind === "box") {
+      const loopId = element.id.replace(/[^A-Za-z0-9_]/g, "_");
+      pushLine(lines, indent, "for (uint8_t sceneY_" + loopId + " = 0; sceneY_" + loopId + " < " + element.height + "; ++sceneY_" + loopId + ") {");
+      pushLine(lines, indent + 2, "for (uint8_t sceneX_" + loopId + " = 0; sceneX_" + loopId + " < " + element.width + "; ++sceneX_" + loopId + ") {");
+      const edge = "sceneX_" + loopId + " == 0 || sceneY_" + loopId + " == 0 || sceneX_" + loopId + " == " + (element.width - 1) + " || sceneY_" + loopId + " == " + (element.height - 1);
+      if (!element.filled) pushLine(lines, indent + 4, "if (!(" + edge + ")) continue;");
+      pushLine(lines, indent + 4, "minitel.moveTo(" + element.x + " + sceneX_" + loopId + ", " + element.y + " + sceneY_" + loopId + ");");
+      pushLine(lines, indent + 4, "minitel.drawMosaicCell(true, true, true, true, true, true);");
+      pushLine(lines, indent + 2, "}");
+      pushLine(lines, indent, "}");
+    } else {
+      const imageId = element.id.replace(/[^A-Za-z0-9_]/g, "_");
+      const masks: number[] = [];
+      for (let y = 0; y < element.height; y += 1) {
+        for (let x = 0; x < element.width; x += 1) {
+          const bits = mosaicBits(element, x, y);
+          masks.push(bits.reduce((mask, bit, index) => bit ? mask | (1 << index) : mask, 0));
+        }
+      }
+      pushLine(lines, indent, "static const uint8_t sceneImage_" + imageId + "[] = { " + masks.map((mask) => "0x" + mask.toString(16).padStart(2, "0")).join(", ") + " };");
+      pushLine(lines, indent, "for (uint8_t sceneY_" + imageId + " = 0; sceneY_" + imageId + " < " + element.height + "; ++sceneY_" + imageId + ") {");
+      pushLine(lines, indent + 2, "for (uint8_t sceneX_" + imageId + " = 0; sceneX_" + imageId + " < " + element.width + "; ++sceneX_" + imageId + ") {");
+      pushLine(lines, indent + 4, "uint8_t sceneMask = sceneImage_" + imageId + "[sceneY_" + imageId + " * " + element.width + " + sceneX_" + imageId + "];");
+      pushLine(lines, indent + 4, "if (sceneMask == 0) continue;");
+      pushLine(lines, indent + 4, "minitel.moveTo(" + element.x + " + sceneX_" + imageId + ", " + element.y + " + sceneY_" + imageId + ");");
+      pushLine(lines, indent + 4, "minitel.drawMosaicCell(sceneMask & 0x01, sceneMask & 0x02, sceneMask & 0x04, sceneMask & 0x08, sceneMask & 0x10, sceneMask & 0x20);");
+      pushLine(lines, indent + 2, "}");
+      pushLine(lines, indent, "}");
+    }
+    pushLine(lines, indent, "minitel.textMode();");
+  });
+}
+
+function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], screenConfig: MinitelScreenConfig, sceneElements: SceneElement[]) {
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const variableNames = collectVariableNames(stacks, variables);
-  const lines: string[] = ["#include <Arduino.h>", "#include <MinitelESP32.h>", "", "MinitelESP32 minitel(Serial2, 16, 17, 1200);"];
+  const lines: string[] = ["#include <Arduino.h>", "#include <MinitelESP32.h>", "", "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows, "MinitelESP32 minitel(Serial2, 16, 17, 1200);"];
 
   if (variableNames.length > 0) {
     lines.push("");
@@ -802,6 +1043,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[]) {
 
   lines.push("", "void setup() {", "  minitel.begin();", "  minitel.resetDisplay();");
   setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables));
+  appendSceneCode(lines, sceneElements, 2);
   lines.push("}", "", "void loop() {");
 
   if (keyStacks.length > 0) {
@@ -822,16 +1064,16 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[]) {
   return lines.join("\n");
 }
 
-function emptyPreviewCells() {
-  return Array.from({ length: SCREEN_COLUMNS * SCREEN_ROWS }, () => ({ char: " ", fg: previewColors.White, bg: previewColors.Black }));
+function emptyPreviewCells(columns: number, rows: number) {
+  return Array.from({ length: columns * rows }, () => ({ char: " ", fg: previewColors.White, bg: previewColors.Black }));
 }
 
-function createPreviewState(variables: VariableDef[]): PreviewState {
+function createPreviewState(variables: VariableDef[], screenConfig: MinitelScreenConfig): PreviewState {
   const values: Record<string, number> = {};
   variables.forEach((variable) => {
     values[variable.name] = exprPreviewNumber(variable.defaultValue, values, 0);
   });
-  return { cells: emptyPreviewCells(), cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", messages: [], variables: values };
+  return { cells: emptyPreviewCells(screenConfig.columns, screenConfig.rows), columns: screenConfig.columns, rows: screenConfig.rows, cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", messages: [], variables: values };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -839,20 +1081,20 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function clearPreview(state: PreviewState) {
-  state.cells = emptyPreviewCells();
+  state.cells = emptyPreviewCells(state.columns, state.rows);
   state.cursorColumn = 1;
   state.cursorRow = 1;
 }
 
 function setCursor(state: PreviewState, column: number, row: number) {
-  state.cursorColumn = clamp(column, 1, SCREEN_COLUMNS);
-  state.cursorRow = clamp(row, 1, SCREEN_ROWS);
+  state.cursorColumn = clamp(column, 1, state.columns);
+  state.cursorRow = clamp(row, 1, state.rows);
 }
 
 function setPreviewCell(state: PreviewState, column: number, row: number, char: string) {
-  const safeColumn = clamp(column, 1, SCREEN_COLUMNS);
-  const safeRow = clamp(row, 1, SCREEN_ROWS);
-  const index = (safeRow - 1) * SCREEN_COLUMNS + (safeColumn - 1);
+  const safeColumn = clamp(column, 1, state.columns);
+  const safeRow = clamp(row, 1, state.rows);
+  const index = (safeRow - 1) * state.columns + (safeColumn - 1);
   state.cells[index] = { char, fg: state.fg, bg: state.bg };
 }
 
@@ -860,13 +1102,13 @@ function writePreviewText(state: PreviewState, text: string) {
   for (const character of text) {
     if (character === "\n") {
       state.cursorColumn = 1;
-      state.cursorRow = clamp(state.cursorRow + 1, 1, SCREEN_ROWS);
+      state.cursorRow = clamp(state.cursorRow + 1, 1, state.rows);
       continue;
     }
     setPreviewCell(state, state.cursorColumn, state.cursorRow, character);
-    if (state.cursorColumn >= SCREEN_COLUMNS) {
+    if (state.cursorColumn >= state.columns) {
       state.cursorColumn = 1;
-      state.cursorRow = clamp(state.cursorRow + 1, 1, SCREEN_ROWS);
+      state.cursorRow = clamp(state.cursorRow + 1, 1, state.rows);
     } else {
       state.cursorColumn += 1;
     }
@@ -1006,14 +1248,50 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[]) {
-  const state = createPreviewState(variables);
+function mosaicPreviewCharacter(element: SceneImageElement, cellX: number, cellY: number) {
+  const bits = mosaicBits(element, cellX, cellY);
+  const brailleMask = (bits[0] ? 1 : 0) | (bits[1] ? 8 : 0) | (bits[2] ? 2 : 0) | (bits[3] ? 16 : 0) | (bits[4] ? 4 : 0) | (bits[5] ? 32 : 0);
+  return brailleMask === 0 ? " " : String.fromCharCode(0x2800 + brailleMask);
+}
+
+function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
+  elements.forEach((element) => {
+    state.fg = previewColors[element.fg];
+    if (element.kind === "text") {
+      state.bg = previewColors[element.bg];
+      state.textSize = element.size;
+      setCursor(state, element.x, element.y);
+      writePreviewText(state, element.text);
+      state.textSize = "Normal";
+      return;
+    }
+    if (element.kind === "box") {
+      for (let y = 0; y < element.height; y += 1) {
+        for (let x = 0; x < element.width; x += 1) {
+          const edge = x === 0 || y === 0 || x === element.width - 1 || y === element.height - 1;
+          if (element.filled || edge) setPreviewCell(state, element.x + x, element.y + y, "█");
+        }
+      }
+      return;
+    }
+    for (let y = 0; y < element.height; y += 1) {
+      for (let x = 0; x < element.width; x += 1) {
+        const character = mosaicPreviewCharacter(element, x, y);
+        if (character !== " ") setPreviewCell(state, element.x + x, element.y + y, character);
+      }
+    }
+  });
+}
+
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], screenConfig: MinitelScreenConfig, sceneElements: SceneElement[]) {
+  const state = createPreviewState(variables, screenConfig);
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
   setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
+  applyScenePreview(state, sceneElements);
   for (let turn = 0; turn < loopCount; turn += 1) {
     loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
   }
@@ -1036,6 +1314,24 @@ function findBlock(blocks: ProgramBlock[], blockId: string): ProgramBlock | unde
     if (child) return child;
   }
   return undefined;
+}
+
+type BlockLocationInfo = {
+  ownerId?: string;
+  slot: DropLocation["slot"];
+  index: number;
+};
+
+function findBlockLocation(blocks: ProgramBlock[], blockId: string, ownerId?: string, slot: DropLocation["slot"] = "root"): BlockLocationInfo | null {
+  const directIndex = blocks.findIndex((block) => block.id === blockId);
+  if (directIndex >= 0) return { ownerId, slot, index: directIndex };
+  for (const block of blocks) {
+    const child = findBlockLocation(block.children ?? [], blockId, block.id, "children");
+    if (child) return child;
+    const alternative = findBlockLocation(block.elseChildren ?? [], blockId, block.id, "elseChildren");
+    if (alternative) return alternative;
+  }
+  return null;
 }
 
 function updateBlockTree(blocks: ProgramBlock[], blockId: string, updater: (block: ProgramBlock) => ProgramBlock): ProgramBlock[] {
@@ -1114,6 +1410,23 @@ function readDragPayload(event: DragEvent) {
   } catch {
     return null;
   }
+}
+
+function dropLocationKey(location: DropLocation) {
+  return [location.stackId, location.ownerId ?? "root", location.slot, String(location.index)].join("|");
+}
+
+function setInvisibleDragImage(event: DragEvent<HTMLElement>) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  event.dataTransfer.setDragImage(canvas, 0, 0);
+}
+
+function dragShapeForDefinition(definition: BlockDefinition): DragPreviewState["shape"] {
+  if (definition.kind === "event") return "event-hat";
+  if (definition.kind === "control") return "c-block";
+  return "brick";
 }
 
 function duplicateBlockInList(blocks: ProgramBlock[], blockId: string): { blocks: ProgramBlock[]; done: boolean; duplicateIds: string[] } {
@@ -1312,19 +1625,39 @@ function InputControl({ input, value, variables, onChange }: { input: BlockInput
   );
 }
 
-function PaletteBlock({ definition, onQuickAdd }: { definition: BlockDefinition; onQuickAdd: (definition: BlockDefinition) => void }) {
+function PaletteBlock({
+  definition,
+  isDragging,
+  onQuickAdd,
+  onPaletteDragStart,
+  onPalettePointerDown,
+  onDragMove,
+  onDragEnd,
+}: {
+  definition: BlockDefinition;
+  isDragging: boolean;
+  onQuickAdd: (definition: BlockDefinition) => void;
+  onPaletteDragStart: (definition: BlockDefinition, event: DragEvent<HTMLElement>) => void;
+  onPalettePointerDown: (definition: BlockDefinition, event: PointerEvent<HTMLElement>) => void;
+  onDragMove: (event: { clientX: number; clientY: number }) => void;
+  onDragEnd: () => void;
+}) {
   const style = { "--block-color": definition.color } as BlockStyle;
   const shape = definition.kind === "event" ? "event-hat" : definition.kind === "control" ? "palette-c-block" : definition.kind === "value" ? "value-block" : "brick";
   return (
     <button
-      className={"palette-block " + shape}
+      className={"palette-block " + shape + (isDragging ? " dragging" : "")}
       style={style}
-      draggable={definition.kind !== "value"}
+      draggable={false}
+      onPointerDown={(event) => onPalettePointerDown(definition, event)}
       onDragStart={(event) => {
         if (definition.kind === "value") return;
         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ source: "palette", definitionId: definition.id }));
         event.dataTransfer.effectAllowed = "copy";
+        onPaletteDragStart(definition, event);
       }}
+      onDrag={onDragMove}
+      onDragEnd={onDragEnd}
       onClick={() => onQuickAdd(definition)}
       title={definition.help}
     >
@@ -1336,13 +1669,34 @@ function PaletteBlock({ definition, onQuickAdd }: { definition: BlockDefinition;
   );
 }
 
-function DropTarget({ location, onDropBranch }: { location: DropLocation; onDropBranch: (payload: DragPayload, location: DropLocation) => void }) {
+function DropTarget({
+  location,
+  isActive,
+  onDropBranch,
+  onActivateDrop,
+  onDragMove,
+}: {
+  location: DropLocation;
+  isActive: boolean;
+  onDropBranch: (payload: DragPayload, location: DropLocation) => void;
+  onActivateDrop: (location: DropLocation) => void;
+  onDragMove: (event: { clientX: number; clientY: number }) => void;
+}) {
   return (
     <div
-      className="drop-target"
+      className={"drop-target" + (isActive ? " active" : "")}
+      data-drop-location={JSON.stringify(location)}
+      onDragEnter={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onActivateDrop(location);
+      }}
       onDragOver={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        onDragMove(event);
+        onActivateDrop(location);
       }}
       onDrop={(event) => {
         event.preventDefault();
@@ -1365,12 +1719,16 @@ function BlockListView({
   removingIds,
   motionIds,
   draggingBlockId,
+  activeDropKey,
   onDropBranch,
   onValueChange,
   onDelete,
   onDuplicate,
   onMove,
   onDragStartBlock,
+  onBlockPointerDown,
+  onDragMove,
+  onActivateDrop,
   onDragEndBlock,
 }: {
   blocks: ProgramBlock[];
@@ -1381,22 +1739,28 @@ function BlockListView({
   removingIds: Set<string>;
   motionIds: Record<string, MotionKind>;
   draggingBlockId: string;
+  activeDropKey: string;
   onDropBranch: (payload: DragPayload, location: DropLocation) => void;
   onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
   onDelete: (stackId: string, blockId: string) => void;
   onDuplicate: (stackId: string, blockId: string) => void;
   onMove: (stackId: string, blockId: string, direction: -1 | 1) => void;
-  onDragStartBlock: (blockId: string) => void;
+  onDragStartBlock: (block: ProgramBlock, definition: BlockDefinition, event: DragEvent<HTMLElement>) => void;
+  onBlockPointerDown: (block: ProgramBlock, definition: BlockDefinition, event: PointerEvent<HTMLElement>) => void;
+  onDragMove: (event: { clientX: number; clientY: number }) => void;
+  onActivateDrop: (location: DropLocation) => void;
   onDragEndBlock: () => void;
 }) {
   return (
     <div className={slot === "root" ? "stack-chain" : "inner-chain"}>
       {blocks.map((block, index) => (
         <div className="block-list-item" key={block.id}>
-          <DropTarget location={{ stackId, ownerId, slot, index }} onDropBranch={onDropBranch} />
+          <DropTarget location={{ stackId, ownerId, slot, index }} isActive={activeDropKey === dropLocationKey({ stackId, ownerId, slot, index })} onDropBranch={onDropBranch} onActivateDrop={onActivateDrop} onDragMove={onDragMove} />
           <ProgramBlockView
             block={block}
             stackId={stackId}
+            ownerId={ownerId}
+            slot={slot}
             index={index}
             isFirst={index === 0}
             isLast={index === blocks.length - 1}
@@ -1404,17 +1768,21 @@ function BlockListView({
             removingIds={removingIds}
             motionIds={motionIds}
             draggingBlockId={draggingBlockId}
+            activeDropKey={activeDropKey}
             onDropBranch={onDropBranch}
             onValueChange={onValueChange}
             onDelete={onDelete}
             onDuplicate={onDuplicate}
             onMove={onMove}
             onDragStartBlock={onDragStartBlock}
+            onBlockPointerDown={onBlockPointerDown}
+            onDragMove={onDragMove}
+            onActivateDrop={onActivateDrop}
             onDragEndBlock={onDragEndBlock}
           />
         </div>
       ))}
-      <DropTarget location={{ stackId, ownerId, slot, index: blocks.length }} onDropBranch={onDropBranch} />
+      <DropTarget location={{ stackId, ownerId, slot, index: blocks.length }} isActive={activeDropKey === dropLocationKey({ stackId, ownerId, slot, index: blocks.length })} onDropBranch={onDropBranch} onActivateDrop={onActivateDrop} onDragMove={onDragMove} />
     </div>
   );
 }
@@ -1422,6 +1790,8 @@ function BlockListView({
 function ProgramBlockView({
   block,
   stackId,
+  ownerId,
+  slot,
   index,
   isFirst,
   isLast,
@@ -1429,16 +1799,22 @@ function ProgramBlockView({
   removingIds,
   motionIds,
   draggingBlockId,
+  activeDropKey,
   onDropBranch,
   onValueChange,
   onDelete,
   onDuplicate,
   onMove,
   onDragStartBlock,
+  onBlockPointerDown,
+  onDragMove,
+  onActivateDrop,
   onDragEndBlock,
 }: {
   block: ProgramBlock;
   stackId: string;
+  ownerId?: string;
+  slot: DropLocation["slot"];
   index: number;
   isFirst: boolean;
   isLast: boolean;
@@ -1446,32 +1822,83 @@ function ProgramBlockView({
   removingIds: Set<string>;
   motionIds: Record<string, MotionKind>;
   draggingBlockId: string;
+  activeDropKey: string;
   onDropBranch: (payload: DragPayload, location: DropLocation) => void;
   onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
   onDelete: (stackId: string, blockId: string) => void;
   onDuplicate: (stackId: string, blockId: string) => void;
   onMove: (stackId: string, blockId: string, direction: -1 | 1) => void;
-  onDragStartBlock: (blockId: string) => void;
+  onDragStartBlock: (block: ProgramBlock, definition: BlockDefinition, event: DragEvent<HTMLElement>) => void;
+  onBlockPointerDown: (block: ProgramBlock, definition: BlockDefinition, event: PointerEvent<HTMLElement>) => void;
+  onDragMove: (event: { clientX: number; clientY: number }) => void;
+  onActivateDrop: (location: DropLocation) => void;
   onDragEndBlock: () => void;
 }) {
   const definition = blockById[block.definitionId];
   const style = { "--block-color": definition.color } as BlockStyle;
   const isControl = definition.kind === "control";
+  const [dropHint, setDropHint] = useState<"before" | "after" | null>(null);
+  const activeBeforeKey = dropLocationKey({ stackId, ownerId, slot, index });
+  const activeAfterKey = dropLocationKey({ stackId, ownerId, slot, index: index + 1 });
+  const activeHint = activeDropKey === activeBeforeKey ? "before" : activeDropKey === activeAfterKey ? "after" : null;
   const motionClass = motionIds[block.id] ? " " + motionIds[block.id] : "";
-  const className = "program-block " + (isControl ? "c-block" : "brick") + " stack-snap" + motionClass + (draggingBlockId === block.id ? " dragging" : "") + (removingIds.has(block.id) ? " deleting" : "");
+  const hintClass = (dropHint ?? activeHint) ? " drop-" + (dropHint ?? activeHint) : "";
+  const className = "program-block " + (isControl ? "c-block" : "brick") + " stack-snap" + motionClass + hintClass + (draggingBlockId === block.id ? " dragging" : "") + (removingIds.has(block.id) ? " deleting" : "");
+
+  function blockDropLocation(event: DragEvent<HTMLElement>): DropLocation {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+    return { stackId, ownerId, slot, index: index + (position === "after" ? 1 : 0) };
+  }
+
+  function updateBlockDropHint(event: DragEvent<HTMLElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setDropHint(event.clientY < rect.top + rect.height / 2 ? "before" : "after");
+  }
 
   return (
     <div
       className={className}
       style={style}
-      draggable
+      draggable={false}
+      data-block-drop="true"
+      data-stack-id={stackId}
+      data-owner-id={ownerId ?? ""}
+      data-slot={slot}
+      data-index={index}
+      onPointerDown={(event) => onBlockPointerDown(block, definition, event)}
       onDragStart={(event) => {
         event.stopPropagation();
-        onDragStartBlock(block.id);
         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ source: "workspace", stackId, blockId: block.id }));
         event.dataTransfer.effectAllowed = "move";
+        onDragStartBlock(block, definition, event);
       }}
-      onDragEnd={onDragEndBlock}
+      onDrag={(event) => onDragMove(event)}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        onDragMove(event);
+        updateBlockDropHint(event);
+        onActivateDrop(blockDropLocation(event));
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDropHint(null);
+        }
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const payload = readDragPayload(event);
+        const location = blockDropLocation(event);
+        setDropHint(null);
+        if (payload) onDropBranch(payload, location);
+      }}
+      onDragEnd={() => {
+        setDropHint(null);
+        onDragEndBlock();
+      }}
       title={definition.help}
     >
       <div className="block-face">
@@ -1514,12 +1941,16 @@ function ProgramBlockView({
             removingIds={removingIds}
             motionIds={motionIds}
             draggingBlockId={draggingBlockId}
+            activeDropKey={activeDropKey}
             onDropBranch={onDropBranch}
             onValueChange={onValueChange}
             onDelete={onDelete}
             onDuplicate={onDuplicate}
             onMove={onMove}
             onDragStartBlock={onDragStartBlock}
+            onBlockPointerDown={onBlockPointerDown}
+            onDragMove={onDragMove}
+            onActivateDrop={onActivateDrop}
             onDragEndBlock={onDragEndBlock}
           />
         </div>
@@ -1528,7 +1959,7 @@ function ProgramBlockView({
   );
 }
 
-function EventHeader({ stack, variables, onEventValueChange, onDeleteStack }: { stack: ScriptStack; variables: VariableDef[]; onEventValueChange: (stackId: string, key: string, value: InputValue) => void; onDeleteStack: (stackId: string) => void }) {
+function EventHeader({ stack, variables, onEventValueChange, onDeleteStack, onStackPointerDown }: { stack: ScriptStack; variables: VariableDef[]; onEventValueChange: (stackId: string, key: string, value: InputValue) => void; onDeleteStack: (stackId: string) => void; onStackPointerDown: (stack: ScriptStack, event: PointerEvent<HTMLElement>) => void }) {
   const definition = blockById[stack.event.definitionId];
   const style = { "--block-color": definition.color } as BlockStyle;
   return (
@@ -1536,7 +1967,8 @@ function EventHeader({ stack, variables, onEventValueChange, onDeleteStack }: { 
       className="program-block event-hat event-header"
       style={style}
       title={definition.help}
-      draggable
+      onPointerDown={(event) => onStackPointerDown(stack, event)}
+      draggable={false}
       onDragStart={(event) => {
         event.stopPropagation();
         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ source: "stack", stackId: stack.id }));
@@ -1581,9 +2013,16 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
 }
 
 function App() {
+  const initialProjectRef = useRef<ProjectSnapshot | null>(null);
+  if (!initialProjectRef.current) initialProjectRef.current = createInitialProject();
+  const initialProject = initialProjectRef.current;
   const [activeCategory, setActiveCategory] = useState("start");
-  const [variables, setVariables] = useState<VariableDef[]>(() => createDefaultVariables());
-  const [stacks, setStacks] = useState<ScriptStack[]>(() => createExampleStacks());
+  const [variables, setVariables] = useState<VariableDef[]>(() => initialProject.variables);
+  const [stacks, setStacks] = useState<ScriptStack[]>(() => initialProject.stacks);
+  const [screenConfig, setScreenConfig] = useState<MinitelScreenConfig>(() => initialProject.screenConfig);
+  const [sceneElements, setSceneElements] = useState<SceneElement[]>(() => initialProject.sceneElements);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("blocks");
+  const [examplesOpen, setExamplesOpen] = useState(false);
   const [selectedStackId, setSelectedStackId] = useState<string>("");
   const [rightTab, setRightTab] = useState<RightTab>("preview");
   const [previewKey, setPreviewKey] = useState("A");
@@ -1592,6 +2031,10 @@ function App() {
   const [removingStacks, setRemovingStacks] = useState<Set<string>>(() => new Set());
   const [motionIds, setMotionIds] = useState<Record<string, MotionKind>>({});
   const [draggingBlockId, setDraggingBlockId] = useState("");
+  const [draggingPaletteId, setDraggingPaletteId] = useState("");
+  const [draggingStackId, setDraggingStackId] = useState("");
+  const [activeDropKey, setActiveDropKey] = useState("");
+  const [dragPreview, setDragPreview] = useState<DragPreviewState | null>(null);
   const [history, setHistory] = useState<HistoryState>(() => ({ past: [], future: [] }));
   const [simRunning, setSimRunning] = useState(false);
   const [simTick, setSimTick] = useState(0);
@@ -1599,6 +2042,11 @@ function App() {
   const [simulatedKeys, setSimulatedKeys] = useState<string[]>([]);
   const motionTimersRef = useRef<Record<string, number>>({});
   const deleteTimersRef = useRef<number[]>([]);
+  const noticeTimerRef = useRef<number | null>(null);
+  const pendingPointerDragRef = useRef<PendingPointerDrag | null>(null);
+  const suppressPaletteClickRef = useRef(false);
+  const dragPreviewElementRef = useRef<HTMLDivElement | null>(null);
+  const activeDropKeyRef = useRef("");
   const [board, setBoard] = useState("esp32dev");
   const [uploadPort, setUploadPort] = useState("");
   const [uploadOutput, setUploadOutput] = useState("Prêt pour PlatformIO");
@@ -1606,16 +2054,216 @@ function App() {
 
   const activeStackId = selectedStackId || stacks[0]?.id || "";
   const activeBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
-  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables), [stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys), [stacks, variables, previewKey, simTick, simulatedKeys]);
+  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, sceneElements), [sceneElements, screenConfig, stacks, variables]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, sceneElements), [sceneElements, screenConfig, stacks, variables, previewKey, simTick, simulatedKeys]);
+
+  function moveDragPreview(event: { clientX: number; clientY: number }) {
+    if (!event.clientX && !event.clientY) return;
+    const previewElement = dragPreviewElementRef.current;
+    if (previewElement) previewElement.style.transform = "translate3d(" + (event.clientX + 16) + "px, " + (event.clientY + 16) + "px, 0)";
+  }
+
+  function beginPaletteDrag(definition: BlockDefinition, event: DragEvent<HTMLElement>) {
+    setInvisibleDragImage(event);
+    setDraggingPaletteId(definition.id);
+    setActiveDropKey("");
+    setDragPreview({ title: definition.title, helper: "Nouveau bloc", color: definition.color, shape: dragShapeForDefinition(definition), x: event.clientX, y: event.clientY });
+  }
+
+  function beginWorkspaceDrag(block: ProgramBlock, definition: BlockDefinition, event: DragEvent<HTMLElement>) {
+    setInvisibleDragImage(event);
+    setDraggingBlockId(block.id);
+    setDraggingPaletteId("");
+    setActiveDropKey("");
+    setDragPreview({ title: definition.title, helper: "Déplacer", color: definition.color, shape: dragShapeForDefinition(definition), x: event.clientX, y: event.clientY });
+  }
+
+  function activateDropLocation(location: DropLocation) {
+    const key = dropLocationKey(location);
+    if (activeDropKeyRef.current === key) return;
+    activeDropKeyRef.current = key;
+    setActiveDropKey(key);
+  }
+
+  function finishDrag() {
+    activeDropKeyRef.current = "";
+    setDraggingBlockId("");
+    setDraggingPaletteId("");
+    setDraggingStackId("");
+    setActiveDropKey("");
+    setDragPreview(null);
+  }
+
+  function preparePalettePointerDrag(definition: BlockDefinition, event: PointerEvent<HTMLElement>) {
+    if (definition.kind === "value" || event.button !== 0) return;
+    const sourceElement = event.currentTarget;
+    sourceElement.setPointerCapture(event.pointerId);
+    pendingPointerDragRef.current = {
+      payload: { source: "palette", definitionId: definition.id },
+      title: definition.title,
+      helper: "Nouveau bloc",
+      color: definition.color,
+      shape: dragShapeForDefinition(definition),
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false,
+      sourcePaletteId: definition.id,
+      pointerId: event.pointerId,
+      sourceElement,
+    };
+  }
+
+  function prepareStackPointerDrag(stack: ScriptStack, event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, select, textarea")) return;
+    const definition = blockById[stack.event.definitionId];
+    const sourceElement = event.currentTarget;
+    sourceElement.setPointerCapture(event.pointerId);
+    pendingPointerDragRef.current = {
+      payload: { source: "stack", stackId: stack.id },
+      title: definition.title,
+      helper: "Déplacer la pile",
+      color: definition.color,
+      shape: "event-hat",
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false,
+      sourceStackId: stack.id,
+      pointerId: event.pointerId,
+      sourceElement,
+    };
+  }
+
+  function prepareWorkspacePointerDrag(block: ProgramBlock, definition: BlockDefinition, event: PointerEvent<HTMLElement>) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, select, textarea")) return;
+    const sourceStackId = stacks.find((stack) => findBlock(stack.blocks, block.id))?.id ?? activeStackId;
+    const sourceElement = event.currentTarget;
+    sourceElement.setPointerCapture(event.pointerId);
+    pendingPointerDragRef.current = {
+      payload: { source: "workspace", stackId: sourceStackId, blockId: block.id },
+      title: definition.title,
+      helper: "Déplacer",
+      color: definition.color,
+      shape: dragShapeForDefinition(definition),
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false,
+      sourceBlockId: block.id,
+      pointerId: event.pointerId,
+      sourceElement,
+    };
+  }
+
+  function dropLocationFromPoint(x: number, y: number): DropLocation | null {
+    const elements = document.elementsFromPoint(x, y) as HTMLElement[];
+    const explicitDrop = elements.find((element) => element.dataset.dropLocation);
+    if (explicitDrop?.dataset.dropLocation) {
+      try {
+        return JSON.parse(explicitDrop.dataset.dropLocation) as DropLocation;
+      } catch {
+        return null;
+      }
+    }
+
+    const blockDrop = elements.find((element) => element.dataset.blockDrop === "true");
+    if (blockDrop) {
+      const rect = blockDrop.getBoundingClientRect();
+      const position = y < rect.top + rect.height / 2 ? "before" : "after";
+      const ownerId = blockDrop.dataset.ownerId || undefined;
+      const slot = (blockDrop.dataset.slot || "root") as DropLocation["slot"];
+      return { stackId: blockDrop.dataset.stackId || activeStackId, ownerId, slot, index: Number(blockDrop.dataset.index || 0) + (position === "after" ? 1 : 0) };
+    }
+
+    const overWorkspace = elements.some((element) => element.classList.contains("workspace-canvas") || element.classList.contains("workspace-panel") || element.classList.contains("script-stack"));
+    if (overWorkspace) {
+      const nearbyTargets = Array.from(document.querySelectorAll<HTMLElement>(".drop-target[data-drop-location]"))
+        .map((target) => ({ target, rect: target.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.bottom >= 0 && rect.top <= window.innerHeight && x >= rect.left - 26 && x <= rect.right + 26)
+        .map(({ target, rect }) => ({ target, distance: Math.abs(y - (rect.top + rect.height / 2)), width: rect.width }))
+        .filter(({ distance }) => distance <= 30)
+        .sort((left, right) => left.distance - right.distance || left.width - right.width);
+      const nearestTarget = nearbyTargets[0]?.target;
+      if (nearestTarget?.dataset.dropLocation) {
+        try {
+          return JSON.parse(nearestTarget.dataset.dropLocation) as DropLocation;
+        } catch {
+          // Continue with the end of the active stack.
+        }
+      }
+      if (activeStackId) return { stackId: activeStackId, slot: "root", index: stacks.find((stack) => stack.id === activeStackId)?.blocks.length ?? 0 };
+    }
+
+    return null;
+  }
+
+  function updatePointerDropTarget(x: number, y: number) {
+    const location = dropLocationFromPoint(x, y);
+    const key = location ? dropLocationKey(location) : "";
+    if (activeDropKeyRef.current === key) return;
+    activeDropKeyRef.current = key;
+    setActiveDropKey(key);
+  }
+
+  function handlePointerMove(event: PointerEvent<HTMLElement>) {
+    const pending = pendingPointerDragRef.current;
+    if (!pending) return;
+    const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
+    if (!pending.started && distance >= 5) {
+      pending.started = true;
+      suppressPaletteClickRef.current = true;
+      setDraggingBlockId(pending.sourceBlockId ?? "");
+      setDraggingPaletteId(pending.sourcePaletteId ?? "");
+      setDraggingStackId(pending.sourceStackId ?? "");
+      setDragPreview({ title: pending.title, helper: pending.helper, color: pending.color, shape: pending.shape, x: event.clientX, y: event.clientY });
+      window.requestAnimationFrame(() => moveDragPreview(event));
+    }
+    if (pending.started) {
+      event.preventDefault();
+      moveDragPreview(event);
+      updatePointerDropTarget(event.clientX, event.clientY);
+    }
+  }
+
+  function handlePointerUp(event: PointerEvent<HTMLElement>) {
+    const pending = pendingPointerDragRef.current;
+    if (!pending) return;
+    if (pending.sourceElement.hasPointerCapture(pending.pointerId)) pending.sourceElement.releasePointerCapture(pending.pointerId);
+    pendingPointerDragRef.current = null;
+    if (pending.started) {
+      event.preventDefault();
+      const location = dropLocationFromPoint(event.clientX, event.clientY);
+      if (location) handleDropBranch(pending.payload, location);
+      window.setTimeout(() => {
+        suppressPaletteClickRef.current = false;
+      }, 0);
+    } else {
+      suppressPaletteClickRef.current = false;
+    }
+    finishDrag();
+  }
+
+  function cancelPointerDrag() {
+    const pending = pendingPointerDragRef.current;
+    if (pending?.sourceElement.hasPointerCapture(pending.pointerId)) pending.sourceElement.releasePointerCapture(pending.pointerId);
+    pendingPointerDragRef.current = null;
+    suppressPaletteClickRef.current = false;
+    finishDrag();
+  }
 
   function flashNotice(message: string) {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
     setNotice(message);
-    window.setTimeout(() => setNotice(""), 2200);
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice("");
+      noticeTimerRef.current = null;
+    }, 2200);
   }
 
   function pushHistory() {
-    const snapshot = cloneProjectSnapshot({ stacks, variables });
+    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, sceneElements });
     setHistory((current) => {
       const last = current.past[current.past.length - 1];
       if (last && JSON.stringify(last) === JSON.stringify(snapshot)) {
@@ -1665,6 +2313,8 @@ function App() {
     clearPendingDeletes();
     setStacks(next.stacks);
     setVariables(next.variables);
+    setScreenConfig(next.screenConfig);
+    setSceneElements(next.sceneElements);
     setSelectedStackId((current) => (next.stacks.some((stack) => stack.id === current) ? current : next.stacks[0]?.id || ""));
     setSimRunning(false);
     setSimTick(0);
@@ -1675,7 +2325,7 @@ function App() {
   function undo() {
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
-    const now = cloneProjectSnapshot({ stacks, variables });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, sceneElements });
     setHistory({ past: history.past.slice(0, -1), future: [now, ...history.future].slice(0, HISTORY_LIMIT) });
     restoreSnapshot(previous);
     flashNotice("Retour en arrière");
@@ -1684,7 +2334,7 @@ function App() {
   function redo() {
     if (history.future.length === 0) return;
     const next = history.future[0];
-    const now = cloneProjectSnapshot({ stacks, variables });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, sceneElements });
     setHistory({ past: [...history.past.slice(-HISTORY_LIMIT + 1), now], future: history.future.slice(1) });
     restoreSnapshot(next);
     flashNotice("Action rétablie");
@@ -1717,6 +2367,11 @@ function App() {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
       const isTyping = target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
+      if (event.key === "Escape") {
+        if (pendingPointerDragRef.current) cancelPointerDrag();
+        if (examplesOpen) setExamplesOpen(false);
+        return;
+      }
       if (isTyping) return;
 
       if (event.ctrlKey || event.metaKey) {
@@ -1741,12 +2396,19 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [history, stacks, variables, rightTab]);
+  }, [examplesOpen, history, rightTab, sceneElements, screenConfig, stacks, variables]);
+
+  useEffect(() => {
+    const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
+    window.addEventListener("dragover", handleDragOver);
+    return () => window.removeEventListener("dragover", handleDragOver);
+  }, []);
 
   useEffect(() => {
     return () => {
       Object.values(motionTimersRef.current).forEach((timer) => window.clearTimeout(timer));
       deleteTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
     };
   }, []);
 
@@ -1773,6 +2435,7 @@ function App() {
   }
 
   function quickAddDefinition(definition: BlockDefinition) {
+    if (suppressPaletteClickRef.current) return;
     if (definition.kind === "value") {
       flashNotice("Choisis calcul dans un champ arrondi");
       return;
@@ -1793,6 +2456,7 @@ function App() {
   }
 
   function handleDropBranch(payload: DragPayload, location: DropLocation) {
+    setActiveDropKey("");
     if (payload.source === "palette") {
       const definition = blockById[payload.definitionId];
       if (definition.kind === "event") {
@@ -1829,6 +2493,22 @@ function App() {
     const previewBranch = sourceStack ? extractBranchFromList(sourceStack.blocks, payload.blockId).branch ?? [] : [];
     const movedIds = collectBlockIds(previewBranch);
     if (movedIds.length === 0) return;
+    const sourceLocation = sourceStack ? findBlockLocation(sourceStack.blocks, payload.blockId) : null;
+    if (location.ownerId && movedIds.includes(location.ownerId)) {
+      flashNotice("Impossible de placer une suite dans elle-même");
+      return;
+    }
+    if (
+      sourceLocation &&
+      payload.stackId === location.stackId &&
+      sourceLocation.ownerId === location.ownerId &&
+      sourceLocation.slot === location.slot &&
+      location.index >= sourceLocation.index &&
+      location.index <= sourceLocation.index + previewBranch.length
+    ) {
+      flashNotice("La suite est déjà à cet endroit");
+      return;
+    }
     pushHistory();
     setStacks((current) => {
       let movingBranch: ProgramBlock[] = [];
@@ -1941,31 +2621,52 @@ function App() {
   }
 
   function resetProgram() {
-    const next = createBlankStacks();
+    const nextStacks = createBlankStacks();
     clearPendingDeletes();
     pushHistory();
-    setStacks(next);
+    setStacks(nextStacks);
     setVariables(createDefaultVariables());
-    setSelectedStackId(next[0].id);
+    setScreenConfig(createDefaultScreenConfig());
+    setSceneElements([]);
+    setWorkspaceMode("blocks");
+    setSelectedStackId(nextStacks[0].id);
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
-    window.setTimeout(() => animateBlock(collectBlockIds(next.flatMap((stack) => stack.blocks)), "history-flash"), 0);
+    window.setTimeout(() => animateBlock(collectBlockIds(nextStacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice("Nouveau programme");
   }
 
-  function loadExample() {
-    const next = createExampleStacks();
+  function loadExample(exampleId: string) {
+    const example = projectExamples.find((item) => item.id === exampleId) ?? projectExamples[0];
+    const next = example.create();
     clearPendingDeletes();
     pushHistory();
-    setStacks(next);
-    setVariables(createDefaultVariables());
-    setSelectedStackId(next[0].id);
+    setStacks(next.stacks);
+    setVariables(next.variables);
+    setScreenConfig(next.screenConfig);
+    setSceneElements(next.sceneElements);
+    setWorkspaceMode(next.sceneElements.length > 0 ? "designer" : "blocks");
+    setSelectedStackId(next.stacks[0]?.id ?? "");
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
-    window.setTimeout(() => animateBlock(collectBlockIds(next.flatMap((stack) => stack.blocks)), "history-flash"), 0);
-    flashNotice("Exemple chargé");
+    setExamplesOpen(false);
+    window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
+    flashNotice(example.name + " chargé");
+  }
+
+  function changeScreenConfig(next: MinitelScreenConfig) {
+    pushHistory();
+    setScreenConfig(next);
+    setSceneElements((current) => fitElementsToScreen(current, next));
+    setSimTick(0);
+  }
+
+  function changeSceneElements(next: SceneElement[]) {
+    pushHistory();
+    setSceneElements(next);
+    setSimTick(0);
   }
 
   function addVariable() {
@@ -2039,12 +2740,12 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={"app-shell" + (dragPreview ? " dragging-active" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
       <header className="topbar">
         <div className="brand-mark"><img src={appLogo} alt="" /></div>
         <div className="brand-copy">
           <h1>Minitel Blocks Studio</h1>
-          <p>ESP32 + Minitel en blocs visuels</p>
+          <p>{screenConfig.name} · {screenConfig.columns} × {screenConfig.rows}</p>
         </div>
         <div className="topbar-actions">
           <div className="history-actions" aria-label="Historique">
@@ -2052,57 +2753,62 @@ function App() {
             <button type="button" className="tool-button icon-only" onClick={redo} disabled={history.future.length === 0} title="Rétablir (Ctrl+Y)"><Redo2 size={18} /></button>
           </div>
           <button type="button" className="tool-button" onClick={resetProgram} title="Nouveau programme"><Eraser size={18} /><span>Nouveau</span></button>
-          <button type="button" className="tool-button" onClick={loadExample} title="Charger un exemple"><Wand2 size={18} /><span>Exemple</span></button>
-          <button type="button" className="tool-button" onClick={exportSketch} title="Exporter le sketch Arduino"><Download size={18} /><span>Exporter</span></button>
+          <button type="button" className="tool-button" onClick={() => setExamplesOpen(true)} title="Ouvrir les exemples"><Wand2 size={18} /><span>Exemples</span></button>
+          <button type="button" className={"tool-button " + (workspaceMode === "designer" ? "active" : "")} onClick={() => setWorkspaceMode("designer")} title="Composer l'écran"><Monitor size={18} /><span>Écran</span></button>
+          <button type="button" className="tool-button" onClick={exportSketch} title="Exporter le programme"><Download size={18} /><span>Exporter</span></button>
           <button type="button" className="tool-button primary" onClick={uploadSketch} title="Téléverser sur l'ESP32"><Upload size={18} /><span>Téléverser</span></button>
         </div>
       </header>
 
-      <main className="studio-grid">
-        <aside className="palette-panel" aria-label="Palette de blocs">
-          <div className="section-title"><Plus size={18} /><span>Blocs</span></div>
-          <div className="category-rail">
-            {categories.map((category) => {
-              const Icon = category.icon;
-              return (
-                <button type="button" key={category.id} className={"category-button " + (activeCategory === category.id ? "active" : "")} style={{ "--category-color": category.accent } as CategoryStyle} onClick={() => setActiveCategory(category.id)} title={category.label}>
-                  <Icon size={18} />
-                  <span>{category.label}</span>
-                </button>
-              );
-            })}
-          </div>
-          <div className="palette-list">
-            {activeCategory === "variables" ? <VariableManager variables={variables} onAdd={addVariable} onChange={changeVariable} onRemove={removeVariable} /> : null}
-            {activeCategory === "operators" ? (
-              <div className="operator-shelf">
-                <Sigma size={18} />
-                <span>Nombres, variables, calculs</span>
-              </div>
-            ) : null}
-            {activeBlocks.map((definition) => <PaletteBlock definition={definition} onQuickAdd={quickAddDefinition} key={definition.id} />)}
-          </div>
-        </aside>
-
-        <section className="workspace-panel" onDragOver={(event) => event.preventDefault()} onDrop={handleWorkspaceDrop} aria-label="Espace de construction">
-          <div className="workspace-header">
-            <div>
-              <div className="section-title"><Radio size={18} /><span>Programme</span></div>
-              <p>{stacks.length} pile{stacks.length > 1 ? "s" : ""} active{stacks.length > 1 ? "s" : ""}</p>
+      <main className={"studio-grid " + workspaceMode + "-mode"}>
+        {workspaceMode === "blocks" ? (
+          <aside className="palette-panel" aria-label="Palette de blocs">
+            <div className="section-title"><Plus size={18} /><span>Blocs</span></div>
+            <div className="category-rail">
+              {categories.map((category) => {
+                const Icon = category.icon;
+                return (
+                  <button type="button" key={category.id} className={"category-button " + (activeCategory === category.id ? "active" : "")} style={{ "--category-color": category.accent } as CategoryStyle} onClick={() => setActiveCategory(category.id)} title={category.label}>
+                    <Icon size={18} />
+                    <span>{category.label}</span>
+                  </button>
+                );
+              })}
             </div>
-            <div className="workspace-chip"><ListTree size={16} /><span>{simRunning ? "Simulation active" : "Blocs imbriqués"}</span></div>
+            <div className="palette-list">
+              {activeCategory === "variables" ? <VariableManager variables={variables} onAdd={addVariable} onChange={changeVariable} onRemove={removeVariable} /> : null}
+              {activeCategory === "operators" ? <div className="operator-shelf"><Sigma size={18} /><span>Nombres, variables, calculs</span></div> : null}
+              {activeBlocks.map((definition) => <PaletteBlock definition={definition} isDragging={draggingPaletteId === definition.id} onQuickAdd={quickAddDefinition} onPaletteDragStart={beginPaletteDrag} onPalettePointerDown={preparePalettePointerDrag} onDragMove={moveDragPreview} onDragEnd={finishDrag} key={definition.id} />)}
+            </div>
+          </aside>
+        ) : null}
+
+        <section className="workspace-panel" aria-label="Espace de construction">
+          <div className="workspace-header">
+            <div className="workspace-heading">
+              <div className="section-title"><Radio size={18} /><span>{workspaceMode === "blocks" ? "Programme" : "Éditeur d'écran"}</span></div>
+              <p>{workspaceMode === "blocks" ? stacks.length + " pile" + (stacks.length > 1 ? "s" : "") + " active" + (stacks.length > 1 ? "s" : "") : sceneElements.length + " élément" + (sceneElements.length > 1 ? "s" : "") + " placé" + (sceneElements.length > 1 ? "s" : "")}</p>
+            </div>
+            <div className="workspace-mode-tabs" aria-label="Mode d'édition">
+              <button type="button" className={workspaceMode === "blocks" ? "active" : ""} onClick={() => setWorkspaceMode("blocks")}><ListTree size={16} /><span>Blocs</span></button>
+              <button type="button" className={workspaceMode === "designer" ? "active" : ""} onClick={() => setWorkspaceMode("designer")}><Monitor size={16} /><span>Écran</span></button>
+            </div>
+            <div className="workspace-chip"><Settings2 size={15} /><span>{screenConfig.columns} × {screenConfig.rows}</span></div>
           </div>
-          <div className="workspace-canvas">
-            {stacks.length === 0 ? (
-              <button type="button" className="empty-workspace" onClick={() => createStackFromEvent("event-setup")}><Plus size={22} /><span>Ajouter une pile</span></button>
-            ) : null}
-            {stacks.map((stack) => (
-              <section className={"script-stack " + (activeStackId === stack.id ? "selected " : "") + (removingStacks.has(stack.id) ? "deleting" : "")} key={stack.id} onClick={() => setSelectedStackId(stack.id)} onDragOver={(event) => event.preventDefault()}>
-                <EventHeader stack={stack} variables={variables} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} />
-                <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={setDraggingBlockId} onDragEndBlock={() => setDraggingBlockId("")} />
-              </section>
-            ))}
-          </div>
+
+          {workspaceMode === "blocks" ? (
+            <div className="workspace-canvas">
+              {stacks.length === 0 ? <button type="button" className="empty-workspace" onClick={() => createStackFromEvent("event-setup")}><Plus size={22} /><span>Ajouter une pile</span></button> : null}
+              {stacks.map((stack) => (
+                <section className={"script-stack " + (activeStackId === stack.id ? "selected " : "") + (removingStacks.has(stack.id) ? "deleting " : "") + (draggingStackId === stack.id ? "dragging" : "")} key={stack.id} onClick={() => setSelectedStackId(stack.id)}>
+                  <EventHeader stack={stack} variables={variables} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} onStackPointerDown={prepareStackPointerDrag} />
+                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
+                </section>
+              ))}
+            </div>
+          ) : (
+            <ScreenDesigner config={screenConfig} elements={sceneElements} onConfigChange={changeScreenConfig} onElementsChange={changeSceneElements} onNotice={flashNotice} />
+          )}
         </section>
 
         <aside className="inspector-panel" aria-label="Prévisualisation et code">
@@ -2115,7 +2821,7 @@ function App() {
           {rightTab === "preview" ? (
             <div className="preview-panel">
               <div className="preview-toolbar">
-                <div className="section-title compact"><Monitor size={17} /><span>Minitel simulé</span></div>
+                <div className="section-title compact"><Monitor size={17} /><span>{screenConfig.name}</span></div>
                 <label className="preview-key"><Keyboard size={15} /><select value={previewKey} onChange={(event) => setPreviewKey(event.target.value)}>{keyOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
               </div>
               <div className="simulation-panel">
@@ -2127,9 +2833,9 @@ function App() {
                 <div className="sim-counter">Tour {Math.max(1, Math.min(12, simTick + 1))}</div>
               </div>
               <div className="minitel-frame">
-                <div className="minitel-screen" style={{ gridTemplateColumns: "repeat(" + SCREEN_COLUMNS + ", 1fr)" }}>
+                <div className="minitel-screen" style={{ gridTemplateColumns: "repeat(" + preview.columns + ", 1fr)", gridTemplateRows: "repeat(" + preview.rows + ", 1fr)", aspectRatio: (preview.columns * 4) + " / " + (preview.rows * 5), "--preview-columns": preview.columns } as CSSProperties}>
                   {preview.cells.map((cell, index) => {
-                    const isCursor = index === (preview.cursorRow - 1) * SCREEN_COLUMNS + (preview.cursorColumn - 1);
+                    const isCursor = index === (preview.cursorRow - 1) * preview.columns + (preview.cursorColumn - 1);
                     return <span className={"screen-cell" + (isCursor ? " cursor-cell" : "") + (cell.char !== " " ? " lit-cell" : "")} style={{ color: cell.fg, backgroundColor: cell.bg }} key={index}>{cell.char}</span>;
                   })}
                 </div>
@@ -2142,8 +2848,8 @@ function App() {
           {rightTab === "code" ? (
             <div className="code-panel">
               <div className="code-toolbar">
-                <div className="section-title compact"><FileCode2 size={17} /><span>Sketch Arduino</span></div>
-                <div className="code-actions"><button type="button" onClick={copyCode} title="Copier le code"><Copy size={16} /></button><button type="button" onClick={exportSketch} title="Exporter le sketch"><Download size={16} /></button></div>
+                <div className="section-title compact"><FileCode2 size={17} /><span>Programme généré</span></div>
+                <div className="code-actions"><button type="button" onClick={copyCode} title="Copier le code"><Copy size={16} /></button><button type="button" onClick={exportSketch} title="Exporter le programme"><Download size={16} /></button></div>
               </div>
               <pre className="code-output">{generatedCode}</pre>
             </div>
@@ -2154,7 +2860,7 @@ function App() {
               <div className="section-title compact"><Terminal size={17} /><span>Téléversement direct</span></div>
               <div className="upload-form">
                 <label><Settings2 size={15} /><span>Carte</span><select value={board} onChange={(event) => setBoard(event.target.value)}><option value="esp32dev">ESP32 Dev Module</option><option value="nodemcu-32s">NodeMCU-32S</option><option value="esp32doit-devkit-v1">DOIT ESP32 DevKit V1</option></select></label>
-                <label><Usb size={15} /><span>Port</span><input value={uploadPort} onChange={(event) => setUploadPort(event.target.value)} placeholder="auto" /></label>
+                <label><Usb size={15} /><span>Port</span><input value={uploadPort} onChange={(event) => setUploadPort(event.target.value)} placeholder="Détection automatique" /></label>
                 <button type="button" className="upload-button" onClick={uploadSketch} disabled={uploading}><Upload size={17} /><span>{uploading ? "Téléversement..." : "Envoyer à l'ESP32"}</span></button>
               </div>
               <pre className="terminal-output">{uploadOutput}</pre>
@@ -2162,6 +2868,33 @@ function App() {
           ) : null}
         </aside>
       </main>
+
+      {dragPreview ? (
+        <div ref={dragPreviewElementRef} className={"drag-preview " + dragPreview.shape} style={{ "--block-color": dragPreview.color, transform: "translate3d(" + (dragPreview.x + 16) + "px, " + (dragPreview.y + 16) + "px, 0)" } as DragPreviewStyle}>
+          <span>{dragPreview.title}</span>
+          <small>{dragPreview.helper}</small>
+        </div>
+      ) : null}
+
+      {examplesOpen ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExamplesOpen(false); }}>
+          <section className="modal-card examples-modal" role="dialog" aria-modal="true" aria-labelledby="examples-title">
+            <header className="modal-header">
+              <div><span className="modal-kicker">Démarrer rapidement</span><h2 id="examples-title">Choisir un exemple</h2><p>Chaque exemple peut être modifié, simulé puis envoyé à l'ESP32.</p></div>
+              <button type="button" className="icon-button" onClick={() => setExamplesOpen(false)} title="Fermer"><X size={18} /></button>
+            </header>
+            <div className="examples-list">
+              {projectExamples.map((example, index) => (
+                <button type="button" className="example-option" style={{ borderLeftColor: example.accent }} onClick={() => loadExample(example.id)} key={example.id}>
+                  <span className="example-number">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="example-copy"><strong>{example.name}</strong><span>{example.description}</span></span>
+                  <ChevronDown className="example-arrow" size={18} />
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       <div className={"notice " + (notice ? "show" : "")}>{notice}</div>
     </div>

@@ -1,63 +1,102 @@
 # Minitel Blocks Studio
 
-Minitel Blocks Studio permet de créer un programme pour un ESP32 qui pilote un Minitel, avec des blocs visuels faciles à assembler. Pas besoin de connaître le code : tu construis ton comportement avec des actions comme afficher du texte, changer les couleurs, réagir aux touches, faire des boucles ou utiliser des variables.
+Minitel Blocks Studio permet de créer des programmes pour un ESP32 qui pilote un Minitel, simplement en assemblant des blocs visuels. Aucun langage de programmation n'est nécessaire : les textes, couleurs, sons, touches, variables, boucles et conditions se construisent à la souris.
 
-![Minitel Blocks Studio](public/logo.png)
+![Logo de Minitel Blocks Studio](public/logo.png)
 
 ## Installer l'application
 
-1. Télécharge le fichier d'installation Windows dans la page **Releases** du projet.
-2. Lance le fichier `Minitel Blocks Studio-Setup-0.1.0.exe`.
-3. Suis l'installation.
-4. Ouvre **Minitel Blocks Studio** depuis le menu Démarrer ou le raccourci du bureau.
+1. Ouvre la page **Releases** du projet.
+2. Télécharge **Minitel Blocks Studio Setup**.
+3. Lance le fichier téléchargé et suis l'installation.
+4. Ouvre l'application depuis le menu Démarrer ou le raccourci du bureau.
 
-## Créer un programme
+## Découvrir l'interface
 
-L'écran principal est divisé en trois zones :
+L'application est organisée en trois zones :
 
-- à gauche, la liste des blocs disponibles ;
-- au centre, l'espace où tu construis ton programme ;
-- à droite, la simulation, le code généré et l'envoi vers l'ESP32.
+- à gauche, les blocs disponibles, rangés par catégorie ;
+- au centre, le programme en blocs ou l'éditeur visuel de l'écran ;
+- à droite, le Minitel simulé, le programme généré et l'envoi vers l'ESP32.
 
-Pour construire un programme, prends un bloc à gauche puis dépose-le dans l'espace central. Les blocs peuvent être empilés, déplacés, supprimés, copiés et imbriqués dans des boucles ou des conditions.
+Le bouton **Exemples** propose plusieurs projets prêts à modifier : découverte, menu interactif, compteur animé, clavier sonore et affiche visuelle.
 
-## Tester avec la simulation
+## Construire avec des blocs
 
-L'onglet **Simulation** affiche un Minitel virtuel. Il permet de vérifier ton programme avant de l'envoyer sur l'ESP32.
+Choisis une catégorie, puis fais glisser un bloc à l'endroit souhaité. Une ligne bleue indique exactement où il sera inséré, y compris entre deux blocs ou à l'intérieur d'une boucle.
 
-Tu peux :
+Une suite reste attachée pendant son déplacement : le bloc tenu, les blocs placés après lui et ses contenus imbriqués se déplacent ensemble.
 
-- cliquer sur **Lancer** pour faire tourner la simulation ;
-- cliquer sur **Pas** pour avancer étape par étape ;
-- cliquer sur **Reset** pour repartir de zéro ;
-- choisir une touche, puis cliquer sur **Tester** ;
-- appuyer directement sur une touche du clavier, par exemple `A`, `B`, `Entrée` ou `Retour`.
+Chaque bloc propose des commandes pour :
 
-Si ton programme contient un bloc du type **quand la touche A**, l'action se déclenche quand tu testes cette touche ou quand tu appuies sur `A` au clavier.
+- le monter ou le descendre ;
+- le dupliquer ;
+- le supprimer ;
+- modifier directement ses textes, nombres, couleurs, variables ou conditions.
+
+## Composer l'écran visuellement
+
+Passe de **Blocs** à **Écran** dans la barre située au-dessus de l'espace central.
+
+Tu peux alors :
+
+- choisir le format de ton Minitel ou définir une grille personnalisée ;
+- ajouter et déplacer du texte sur la grille ;
+- créer un cadre vide ou rempli ;
+- placer, redimensionner et recolorer les éléments ;
+- importer une image pour la transformer en mosaïque Minitel.
+
+Les éléments créés dans ce mode apparaissent automatiquement dans la simulation et sont inclus lors de l'envoi vers l'ESP32.
+
+## Importer une image
+
+Dans le mode **Écran**, clique sur **Image**, puis choisis une image sur ton ordinateur.
+
+Une fenêtre permet de préparer le résultat avant de l'ajouter :
+
+- **Seuil** produit des formes nettes ;
+- **Trame** crée un motif régulier ;
+- **Diffusion** conserve davantage de détails ;
+- la luminosité, le contraste et le seuil ajustent le rendu ;
+- le cadrage, la taille, la couleur et l'inversion restent modifiables.
+
+L'aperçu montre les pixels qui seront utilisés par le Minitel.
+
+## Tester avec le Minitel simulé
+
+L'onglet **Simulation** permet de vérifier le résultat avant l'envoi.
+
+- **Lancer** fait tourner le programme.
+- **Pas** avance d'une étape.
+- **Reset** remet la simulation au début.
+- **Tester A** déclenche la touche sélectionnée.
+- Une touche du clavier, comme `A`, `B`, `Entrée` ou `Retour`, peut aussi être utilisée directement.
+
+La simulation suit le format d'écran choisi dans le projet.
 
 ## Envoyer sur l'ESP32
 
-1. Branche ton ESP32 en USB.
+1. Branche l'ESP32 avec un câble USB adapté aux données.
 2. Ouvre l'onglet **ESP32**.
-3. Choisis le modèle de carte si nécessaire.
-4. Laisse le port sur **auto**, ou choisis le port si tu le connais.
+3. Choisis le modèle de carte.
+4. Laisse le port en détection automatique, sauf si tu souhaites en indiquer un.
 5. Clique sur **Envoyer à l'ESP32**.
 
-La première fois, l'application peut avoir besoin d'Internet pour préparer les outils d'envoi. Selon ta carte ESP32, Windows peut aussi demander un pilote USB.
+La première utilisation peut demander une connexion Internet pour préparer automatiquement l'envoi. Selon la carte, Windows peut aussi demander son pilote USB.
 
-## Raccourcis utiles
+## Raccourcis
 
 - `Ctrl+Z` : annuler.
-- `Ctrl+Y` : rétablir.
-- `Ctrl+Shift+Z` : rétablir aussi.
-- Dans la simulation, appuie sur une touche du clavier pour la tester.
+- `Ctrl+Y` ou `Ctrl+Shift+Z` : rétablir.
+- `Échap` : annuler un déplacement ou fermer la fenêtre des exemples.
+- Dans la simulation, appuie directement sur une touche pour la tester.
 
-## Conseils
+## En cas de problème
 
-- Commence avec le programme exemple pour comprendre le fonctionnement.
-- Utilise la simulation avant d'envoyer sur l'ESP32.
-- Si l'envoi échoue, vérifie le câble USB, le port choisi et le modèle de carte.
-- Si rien ne s'affiche sur le Minitel, vérifie le branchement entre l'ESP32 et le Minitel.
+- Utilise **Reset** si la simulation semble déjà avancée.
+- Vérifie le câble USB, le modèle de carte et le port si l'envoi échoue.
+- Vérifie le branchement entre l'ESP32 et le Minitel si l'écran reste vide.
+- Commence avec un exemple, puis modifie-le petit à petit.
 
 ## Licence
 

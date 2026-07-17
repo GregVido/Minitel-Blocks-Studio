@@ -1,8 +1,17 @@
-# Minitel Blocks Studio
+<table width="100%">
+  <tr>
+    <td width="100">
+      <img src="public/logo.png" alt="Logo" width="100">
+    </td>
+    <td width="700" align="center">
+      <h1>Minitel Blocks Studio</h1>
+    </td>
+  </tr>
+</table>
 
 Minitel Blocks Studio permet de créer des programmes pour un ESP32 qui pilote un Minitel, simplement en assemblant des blocs visuels. Aucun langage de programmation n'est nécessaire : les textes, couleurs, sons, touches, variables, boucles et conditions se construisent à la souris.
 
-![Logo de Minitel Blocks Studio](public/logo.png)
+![Logo de Minitel Blocks Studio](public/example.png)
 
 ## Installer l'application
 
@@ -64,6 +73,8 @@ Les éléments créés dans ce mode apparaissent automatiquement dans la simulat
 
 Dans le mode **Écran**, clique sur **Image**, puis choisis une image sur ton ordinateur.
 
+![Selection d'une image](public/image.png)
+
 Une fenêtre permet de préparer le résultat avant de l'ajouter :
 
 - **Seuil** produit des formes nettes ;
@@ -71,6 +82,8 @@ Une fenêtre permet de préparer le résultat avant de l'ajouter :
 - **Diffusion** conserve davantage de détails ;
 - la luminosité, le contraste et le seuil ajustent le rendu ;
 - le cadrage, la taille, la couleur et l'inversion restent modifiables.
+
+![Selection d'une image](public/image_import.png)
 
 L'aperçu montre les pixels qui seront utilisés par le Minitel.
 

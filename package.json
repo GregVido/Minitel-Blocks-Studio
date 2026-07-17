@@ -1,6 +1,6 @@
 {
   "name": "minitel-blocks-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Interface éducative en blocs pour programmer un ESP32 qui pilote un Minitel.",
   "type": "module",
@@ -12,9 +12,10 @@
     "build": "tsc && vite build --configLoader runner",
     "preview": "npm run build && node scripts/serve-dist.cjs",
     "serve": "node scripts/serve-dist.cjs",
-    "pack": "npm run build && electron-builder --dir --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis --publish never",
-    "dist": "npm run dist:win"
+    "pack": "npm run build && npm run prepare:esp32 && electron-builder --dir --publish never",
+    "dist:win": "npm run build && npm run prepare:esp32 && electron-builder --win nsis --publish never",
+    "dist": "npm run dist:win",
+    "prepare:esp32": "node scripts/prepare-esp32-toolchain.cjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

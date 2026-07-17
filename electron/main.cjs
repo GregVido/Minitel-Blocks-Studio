@@ -3,9 +3,14 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs/promises");
 const fsSync = require("fs");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const isDevelopment = !app.isPackaged;
+const SUPPORTED_BOARDS = {
+  esp32dev: { fqbn: "esp32:esp32:esp32", label: "ESP32 Dev Module" },
+  "nodemcu-32s": { fqbn: "esp32:esp32:nodemcu-32s", label: "NodeMCU-32S" },
+  "esp32doit-devkit-v1": { fqbn: "esp32:esp32:esp32doit-devkit-v1", label: "DOIT ESP32 DevKit V1" },
+};
 
 function appIconPath() {
   const icon = app.isPackaged ? path.join(process.resourcesPath, "logo.png") : path.join(app.getAppPath(), "logo.png");
@@ -37,18 +42,35 @@ function createWindow() {
   }
 }
 
-async function copyDirectory(source, destination) {
-  await fs.mkdir(destination, { recursive: true });
-  const entries = await fs.readdir(source, { withFileTypes: true });
-  for (const entry of entries) {
-    const sourcePath = path.join(source, entry.name);
-    const destinationPath = path.join(destination, entry.name);
-    if (entry.isDirectory()) {
-      await copyDirectory(sourcePath, destinationPath);
-    } else {
-      await fs.copyFile(sourcePath, destinationPath);
-    }
-  }
+function runCommand(command, args, cwd, extraEnv = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd,
+      shell: false,
+      windowsHide: true,
+      env: { ...process.env, ARDUINO_METRICS_ENABLED: "false", ...extraEnv },
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      finish({ ok: false, exitCode: -1, stdout, stderr: stderr + error.message, output: stdout + stderr + error.message });
+    });
+    child.on("close", (code) => {
+      finish({ ok: code === 0, exitCode: code == null ? -1 : code, stdout, stderr, output: stdout + stderr });
+    });
+  });
 }
 
 async function pathExists(filePath) {
@@ -60,245 +82,352 @@ async function pathExists(filePath) {
   }
 }
 
-function looksLikePath(command) {
-  return path.isAbsolute(command) || command.includes("/") || command.includes("\\");
+function resourcesRoot() {
+  return app.isPackaged ? path.join(process.resourcesPath, "resources") : path.join(app.getAppPath(), "resources");
 }
 
-function platformioVenvDir() {
-  return path.join(app.getPath("userData"), "platformio-venv");
+function toolchainRoot() {
+  return path.join(resourcesRoot(), "esp32-toolchain");
 }
 
-function platformioBinaryInVenv() {
-  return process.platform === "win32"
-    ? path.join(platformioVenvDir(), "Scripts", "platformio.exe")
-    : path.join(platformioVenvDir(), "bin", "platformio");
+function embeddedCliPath() {
+  return path.join(toolchainRoot(), process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli");
 }
 
-function bundledPlatformioBinary() {
-  if (!app.isPackaged) return "";
-  return process.platform === "win32"
-    ? path.join(process.resourcesPath, "platformio", "penv", "Scripts", "platformio.exe")
-    : path.join(process.resourcesPath, "platformio", "bin", "platformio");
-}
+let runtimeToolchainPromise = null;
+let runtimeSubstDrive = "";
+let runtimeSubstOwned = false;
 
-function platformioCandidates() {
-  const candidates = [];
-  if (process.env.PLATFORMIO_EXE) candidates.push(process.env.PLATFORMIO_EXE);
-  const bundled = bundledPlatformioBinary();
-  if (bundled) candidates.push(bundled);
-  candidates.push(platformioBinaryInVenv());
-  if (process.platform === "win32") {
-    candidates.push(path.join(os.homedir(), ".platformio", "penv", "Scripts", "platformio.exe"));
-  }
-  candidates.push("platformio");
-  return [...new Set(candidates)];
-}
+async function runtimeToolchainRoot() {
+  const source = toolchainRoot();
+  if (process.platform !== "win32") return source;
+  if (runtimeToolchainPromise) return runtimeToolchainPromise;
 
-async function findPlatformio() {
-  for (const command of platformioCandidates()) {
-    if (looksLikePath(command) && !(await pathExists(command))) continue;
-    const probe = await runCommand(command, ["--version"], app.getPath("userData"));
-    if (probe.ok) {
-      return { command, output: probe.output.trim() };
+  runtimeToolchainPromise = (async () => {
+    const mappings = await runCommand("subst.exe", [], app.getPath("temp"));
+    if (mappings.ok) {
+      for (const line of mappings.stdout.split(/\r?\n/)) {
+        const match = line.match(/^([A-Z]:)\\: => (.+)$/i);
+        if (match && path.resolve(match[2]).toLowerCase() === path.resolve(source).toLowerCase()) {
+          runtimeSubstDrive = match[1].toUpperCase();
+          return runtimeSubstDrive + "\\";
+        }
+      }
     }
-  }
-  return null;
-}
 
-async function findPython() {
-  const candidates = process.platform === "win32"
-    ? [
-        { command: "py", args: ["-3"] },
-        { command: "python", args: [] },
-        { command: "python3", args: [] },
-      ]
-    : [
-        { command: "python3", args: [] },
-        { command: "python", args: [] },
-      ];
-
-  for (const candidate of candidates) {
-    const probe = await runCommand(candidate.command, [...candidate.args, "--version"], app.getPath("userData"));
-    if (probe.ok) {
-      return candidate;
+    const candidates = ["Z:", "Y:", "X:", "W:", "V:", "U:", "T:", "S:", "R:", "Q:", "P:", "O:", "N:"];
+    for (const drive of candidates) {
+      if (await pathExists(drive + "\\")) continue;
+      const created = await runCommand("subst.exe", [drive, source], app.getPath("temp"));
+      if (!created.ok) continue;
+      runtimeSubstDrive = drive;
+      runtimeSubstOwned = true;
+      return drive + "\\";
     }
-  }
-  return null;
+    return source;
+  })();
+  return runtimeToolchainPromise;
 }
 
-async function installPlatformio() {
-  const userData = app.getPath("userData");
-  await fs.mkdir(userData, { recursive: true });
-  let output = "PlatformIO introuvable. Preparation d'un environnement PlatformIO prive...\n";
-  const python = await findPython();
+function yamlPath(value) {
+  return JSON.stringify(path.resolve(value).replace(/\\/g, "/"));
+}
 
-  if (!python) {
+async function ensureRuntimeConfig(engineRoot) {
+  const runtimeRoot = path.join(app.getPath("userData"), "esp32-runtime");
+  const downloadsRoot = path.join(runtimeRoot, "downloads");
+  const userRoot = path.join(runtimeRoot, "sketchbook");
+  const configPath = path.join(runtimeRoot, "arduino-cli.yaml");
+  await fs.mkdir(downloadsRoot, { recursive: true });
+  await fs.mkdir(userRoot, { recursive: true });
+  await fs.writeFile(configPath, [
+    "directories:",
+    "  data: " + yamlPath(path.join(engineRoot, "data")),
+    "  downloads: " + yamlPath(downloadsRoot),
+    "  user: " + yamlPath(userRoot),
+    "metrics:",
+    "  enabled: false",
+    "",
+  ].join("\n"), "utf8");
+  return configPath;
+}
+
+async function runEmbeddedCli(args, cwd) {
+  if (!(await pathExists(embeddedCliPath()))) {
     return {
       ok: false,
-      output: output + "Python 3 est introuvable. Installe Python 3, relance l'application, puis reessaie le televersement.\n",
+      exitCode: -1,
+      stdout: "",
+      stderr: "Le moteur ESP32 integre est absent de cette installation.",
+      output: "Le moteur ESP32 integre est absent de cette installation.",
     };
   }
-
-  const venvDir = platformioVenvDir();
-  const createVenv = await runCommand(python.command, [...python.args, "-m", "venv", venvDir], userData);
-  output += createVenv.output + "\n";
-  if (!createVenv.ok) {
-    return { ok: false, output: output + "Impossible de creer l'environnement Python prive.\n" };
-  }
-
-  const pythonInVenv = process.platform === "win32"
-    ? path.join(venvDir, "Scripts", "python.exe")
-    : path.join(venvDir, "bin", "python");
-  const install = await runCommand(pythonInVenv, ["-m", "pip", "install", "--upgrade", "pip", "platformio"], userData);
-  output += install.output + "\n";
-  if (!install.ok) {
-    return { ok: false, output: output + "Impossible d'installer PlatformIO automatiquement. Verifie la connexion Internet puis reessaie.\n" };
-  }
-
-  const command = platformioBinaryInVenv();
-  const version = await runCommand(command, ["--version"], userData);
-  output += version.output + "\n";
-  return version.ok
-    ? { ok: true, command, output }
-    : { ok: false, output: output + "PlatformIO a ete installe, mais ne demarre pas correctement.\n" };
+  const engineRoot = await runtimeToolchainRoot();
+  const cli = path.join(engineRoot, process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli");
+  const configPath = await ensureRuntimeConfig(engineRoot);
+  return runCommand(cli, [...args, "--config-file", configPath, "--no-color"], cwd || app.getPath("userData"));
 }
 
-async function ensurePlatformio() {
-  const found = await findPlatformio();
-  if (found) {
-    return { ok: true, command: found.command, output: "PlatformIO pret: " + found.command + "\n" + found.output + "\n" };
-  }
-  return installPlatformio();
+function portNumber(value) {
+  const match = String(value).match(/COM(\d+)/i);
+  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
 }
 
-function runCommand(command, args, cwd, extraEnv = {}) {
-  return new Promise((resolve) => {
-    const child = spawn(command, args, { cwd, shell: false, windowsHide: true, env: { ...process.env, PLATFORMIO_SETTING_ENABLE_TELEMETRY: "false", PIP_DISABLE_PIP_VERSION_CHECK: "1", PYTHONUTF8: "1", ...extraEnv } });
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk.toString();
-    });
-    child.on("error", (error) => {
-      resolve({ ok: false, exitCode: -1, output: output + "\n" + error.message });
-    });
-    child.on("close", (code) => {
-      resolve({ ok: code === 0, exitCode: code ?? -1, output });
-    });
+function parseCliPorts(output) {
+  try {
+    const parsed = JSON.parse(output);
+    const entries = Array.isArray(parsed) ? parsed : parsed.detected_ports || parsed.ports || parsed.items || [];
+    return entries.map((entry) => {
+      const port = entry.port || entry;
+      const address = String(port.address || port.port || port.label || "").trim();
+      const boards = entry.matching_boards || entry.boards || [];
+      const board = boards[0] || {};
+      const properties = port.properties || {};
+      const details = [board.name, port.protocol_label, port.label, properties.product, properties.manufacturer]
+        .filter(Boolean)
+        .join(" · ");
+      const fingerprint = [board.name, board.fqbn, details, properties.vid, properties.pid].filter(Boolean).join(" ");
+      return {
+        path: address,
+        label: board.name || port.protocol_label || port.label || "Port serie " + address,
+        details,
+        fqbn: board.fqbn || "",
+        likelyEsp32: /esp32|espressif|cp210|ch340|wch|silicon labs/i.test(fingerprint),
+      };
+    }).filter((port) => port.path && (process.platform !== "win32" || /^COM\d+$/i.test(port.path)));
+  } catch {
+    return [];
+  }
+}
+
+async function registrySerialPorts() {
+  if (process.platform !== "win32") return [];
+  const result = await runCommand("reg.exe", ["query", "HKLM\\HARDWARE\\DEVICEMAP\\SERIALCOMM"], app.getPath("userData"));
+  if (!result.ok) return [];
+  const seen = new Set();
+  const ports = [];
+  for (const line of result.stdout.split(/\r?\n/)) {
+    const match = line.match(/REG_SZ\s+(COM\d+)\s*$/i);
+    if (!match || seen.has(match[1].toUpperCase())) continue;
+    const address = match[1].toUpperCase();
+    seen.add(address);
+    ports.push({ path: address, label: "Port serie " + address, details: "Detecte par Windows", fqbn: "", likelyEsp32: false });
+  }
+  return ports;
+}
+
+async function listSerialPorts() {
+  const detected = [];
+  if (await pathExists(embeddedCliPath())) {
+    const result = await runEmbeddedCli(["board", "list", "--json", "--discovery-timeout", "2s"]);
+    if (result.ok) detected.push(...parseCliPorts(result.stdout));
+  }
+  const fallback = await registrySerialPorts();
+  const byPath = new Map();
+  for (const port of [...detected, ...fallback]) {
+    const key = port.path.toUpperCase();
+    if (!byPath.has(key) || port.likelyEsp32) byPath.set(key, port);
+  }
+  return [...byPath.values()].sort((left, right) => {
+    if (left.likelyEsp32 !== right.likelyEsp32) return left.likelyEsp32 ? -1 : 1;
+    return portNumber(left.path) - portNumber(right.path) || left.path.localeCompare(right.path);
   });
 }
 
 function safeBoard(board) {
-  const allowed = new Set(["esp32dev", "nodemcu-32s", "esp32doit-devkit-v1"]);
-  return allowed.has(board) ? board : "esp32dev";
+  return SUPPORTED_BOARDS[board] || SUPPORTED_BOARDS.esp32dev;
 }
 
-function resourcesRoot() {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, "resources");
+function safeSerialPort(value) {
+  const port = String(value || "").trim();
+  if (process.platform === "win32") return /^COM\d+$/i.test(port) ? port.toUpperCase() : "";
+  return /^\/dev\/[A-Za-z0-9._/-]+$/.test(port) ? port : "";
+}
+
+function portableSketchCode(code) {
+  return String(code || "").replace(/#include\s*<MinitelESP32\.h>/, '#include "MinitelESP32.h"');
+}
+
+async function copyLibrarySources(destination) {
+  const sourceRoot = path.join(resourcesRoot(), "MinitelESP32", "src");
+  await fs.copyFile(path.join(sourceRoot, "MinitelESP32.h"), path.join(destination, "MinitelESP32.h"));
+  await fs.copyFile(path.join(sourceRoot, "MinitelESP32.cpp"), path.join(destination, "MinitelESP32.cpp"));
+}
+
+function safeProjectName(value) {
+  const cleaned = String(value || "MinitelBlocks").replace(/[^A-Za-z0-9_-]+/g, "").slice(0, 48);
+  return cleaned || "MinitelBlocks";
+}
+
+function compactFailure(output) {
+  const value = String(output || "Erreur inconnue").trim();
+  return value.length > 12000 ? value.slice(-12000) : value;
+}
+
+function sendUploadProgress(event, stage, message) {
+  if (!event.sender.isDestroyed()) event.sender.send("esp32-upload-progress", { stage, message });
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.whenReady().then(createWindow);
+}
+
+app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+});
+
+app.on("will-quit", () => {
+  if (runtimeSubstOwned && runtimeSubstDrive) {
+    spawnSync("subst.exe", [runtimeSubstDrive, "/D"], { windowsHide: true });
   }
-  return path.join(app.getAppPath(), "resources");
-}
-
-app.whenReady().then(createWindow);
+});
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });
 
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
 
-ipcMain.handle("save-arduino-sketch", async (_event, payload) => {
-  const defaultPath = payload && payload.fileName ? payload.fileName : "MinitelBlocks.ino";
-  const result = await dialog.showSaveDialog({
-    title: "Exporter le sketch Arduino",
-    defaultPath,
-    filters: [
-      { name: "Sketch Arduino", extensions: ["ino"] },
-      { name: "Tous les fichiers", extensions: ["*"] },
-    ],
+ipcMain.handle("list-serial-ports", async () => ({
+  ok: true,
+  ports: await listSerialPorts(),
+  engineReady: await pathExists(embeddedCliPath()),
+}));
+
+ipcMain.handle("export-arduino-project", async (_event, payload) => {
+  const projectName = safeProjectName(payload && payload.projectName);
+  const result = await dialog.showOpenDialog({
+    title: "Choisir ou enregistrer le dossier du projet Arduino",
+    buttonLabel: "Exporter ici",
+    properties: ["openDirectory", "createDirectory"],
   });
+  if (result.canceled || !result.filePaths[0]) return { ok: false, canceled: true };
 
-  if (result.canceled || !result.filePath) {
-    return { ok: false, canceled: true };
+  const projectPath = path.join(result.filePaths[0], projectName);
+  const sketchPath = path.join(projectPath, projectName + ".ino");
+  if (await pathExists(sketchPath)) {
+    const confirmation = await dialog.showMessageBox({
+      type: "question",
+      buttons: ["Remplacer", "Annuler"],
+      defaultId: 0,
+      cancelId: 1,
+      title: "Projet deja present",
+      message: "Le projet " + projectName + " existe deja dans ce dossier.",
+      detail: "Les fichiers du programme et de la bibliotheque seront remplaces.",
+    });
+    if (confirmation.response !== 0) return { ok: false, canceled: true };
   }
 
-  await fs.writeFile(result.filePath, payload.content, "utf8");
-  return { ok: true, filePath: result.filePath };
+  await fs.mkdir(projectPath, { recursive: true });
+  await fs.writeFile(sketchPath, portableSketchCode(payload && payload.code), "utf8");
+  await copyLibrarySources(projectPath);
+  await fs.writeFile(path.join(projectPath, "LISEZ-MOI.txt"), [
+    "PROJET ARDUINO MINITEL BLOCKS",
+    "",
+    "Ouvrez " + projectName + ".ino dans Arduino IDE.",
+    "MinitelESP32.h et MinitelESP32.cpp sont deja inclus dans ce dossier : aucune bibliotheque Minitel n'est a installer.",
+    "Choisissez votre carte ESP32 et son port, puis utilisez le bouton Televerser.",
+    "",
+  ].join("\r\n"), "utf8");
+  return { ok: true, filePath: projectPath };
 });
 
-ipcMain.handle("upload-esp32", async (_event, payload) => {
-  const board = safeBoard(payload && payload.board ? payload.board : "esp32dev");
-  const uploadPort = payload && payload.port ? String(payload.port).trim() : "";
-  const code = payload && payload.code ? String(payload.code) : "";
-  const projectPath = path.join(os.tmpdir(), "minitel-blocks-upload");
-  const srcPath = path.join(projectPath, "src");
-  const libPath = path.join(projectPath, "lib", "MinitelESP32");
-
-  await fs.rm(projectPath, { recursive: true, force: true });
-  await fs.mkdir(srcPath, { recursive: true });
-  await fs.mkdir(path.dirname(libPath), { recursive: true });
-  await copyDirectory(path.join(resourcesRoot(), "MinitelESP32"), libPath);
-
-  const platformioIni = [
-    "[env:minitel_esp32]",
-    "platform = espressif32",
-    "board = " + board,
-    "framework = arduino",
-    "monitor_speed = 115200",
-    "upload_speed = 921600",
-    "lib_deps =",
-    "",
-  ].join("\n");
-
-  await fs.writeFile(path.join(projectPath, "platformio.ini"), platformioIni, "utf8");
-  await fs.writeFile(path.join(srcPath, "main.cpp"), code, "utf8");
-
-  const args = ["run", "-e", "minitel_esp32", "-t", "upload"];
-  if (uploadPort) {
-    args.push("--upload-port", uploadPort);
+ipcMain.handle("upload-esp32", async (event, payload) => {
+  const board = safeBoard(payload && payload.board);
+  const code = portableSketchCode(payload && payload.code);
+  if (!code.trim()) return { ok: false, exitCode: -1, output: "Le programme est vide." };
+  if (!(await pathExists(embeddedCliPath()))) {
+    return { ok: false, exitCode: -1, output: "Le moteur ESP32 integre manque dans cette installation. Reinstalle la derniere version complete de l'application." };
   }
 
-  const platformio = await ensurePlatformio();
-  if (!platformio.ok) {
+  sendUploadProgress(event, "detect", "Recherche de l'ESP32 branche...");
+  const ports = await listSerialPorts();
+  const requestedPort = safeSerialPort(payload && payload.port);
+  const selectedPort = requestedPort || (ports[0] && ports[0].path) || "";
+  if (!selectedPort) {
+    return { ok: false, exitCode: -1, output: "Aucun port serie detecte. Branche l'ESP32 avec un cable USB de donnees, puis actualise les ports." };
+  }
+  if (requestedPort && !ports.some((port) => port.path.toUpperCase() === requestedPort.toUpperCase())) {
+    return { ok: false, exitCode: -1, output: requestedPort + " n'est plus disponible. Rebranche l'ESP32 puis actualise les ports." };
+  }
+
+  const projectRoot = path.join(os.tmpdir(), "minitel-blocks-upload");
+  const sketchRoot = path.join(projectRoot, "MinitelBlocks");
+  const buildRoot = path.join(projectRoot, "build");
+  const resolvedTemp = path.resolve(os.tmpdir()) + path.sep;
+  if (!path.resolve(projectRoot).startsWith(resolvedTemp)) {
+    return { ok: false, exitCode: -1, output: "Le dossier temporaire de compilation est invalide." };
+  }
+  await fs.rm(projectRoot, { recursive: true, force: true });
+  await fs.mkdir(sketchRoot, { recursive: true });
+  await fs.mkdir(buildRoot, { recursive: true });
+  await fs.writeFile(path.join(sketchRoot, "MinitelBlocks.ino"), code, "utf8");
+  await copyLibrarySources(sketchRoot);
+
+  sendUploadProgress(event, "compile", "Compilation pour " + board.label + "...");
+  const compileArgs = [
+    "compile",
+    "--fqbn", board.fqbn,
+    "--build-path", buildRoot,
+    "--jobs", "0",
+    "--warnings", "none",
+    sketchRoot,
+  ];
+  let compile = await runEmbeddedCli(compileArgs, projectRoot);
+  if (!compile.ok && !/(fatal error:|:\s*error:)/i.test(compile.output)) {
+    sendUploadProgress(event, "compile", "Nouvel essai de compilation securise...");
+    compile = await runEmbeddedCli(["compile", "--clean", ...compileArgs.slice(1, 5), "--jobs", "1", ...compileArgs.slice(7)], projectRoot);
+  }
+  if (!compile.ok) {
     return {
       ok: false,
-      exitCode: -1,
-      output: "Projet: " + projectPath + "\n\n" + platformio.output,
-      projectPath,
+      exitCode: compile.exitCode,
+      output: "La compilation n'a pas abouti.\n\n" + compactFailure(compile.output),
+      projectPath: sketchRoot,
+      port: selectedPort,
     };
   }
 
-  const command = platformio.command;
-  const privateCoreDir = path.join(app.getPath("userData"), "platformio-core");
-  await fs.mkdir(privateCoreDir, { recursive: true });
-  let result = await runCommand(command, args, projectPath, { PLATFORMIO_CORE_DIR: privateCoreDir });
-  let retryNote = "";
-
-  if (!result.ok && /platforms\.lock|HomeDirPermissionsError|PermissionError/.test(result.output)) {
-    const retryCoreDir = path.join(app.getPath("userData"), "platformio-core-retry");
-    await fs.mkdir(retryCoreDir, { recursive: true });
-    retryNote = "\n\nLe dossier PlatformIO est verrouille. Nouvel essai avec un dossier prive: " + retryCoreDir + "\n";
-    const retry = await runCommand(command, args, projectPath, { PLATFORMIO_CORE_DIR: retryCoreDir });
-    result = {
-      ok: retry.ok,
-      exitCode: retry.exitCode,
-      output: result.output + retryNote + retry.output,
+  sendUploadProgress(event, "upload", "Envoi du programme sur " + selectedPort + "...");
+  const upload = await runEmbeddedCli([
+    "upload",
+    "--fqbn", board.fqbn,
+    "--port", selectedPort,
+    "--build-path", buildRoot,
+    sketchRoot,
+  ], projectRoot);
+  if (!upload.ok) {
+    const bootHelp = /failed to connect|no serial data|timed out|connecting/i.test(upload.output)
+      ? "\n\nMaintiens le bouton BOOT de la carte pendant le debut de l'envoi, puis reessaie."
+      : "";
+    return {
+      ok: false,
+      exitCode: upload.exitCode,
+      output: "L'ESP32 a ete detecte sur " + selectedPort + ", mais l'envoi a echoue." + bootHelp + "\n\n" + compactFailure(upload.output),
+      projectPath: sketchRoot,
+      port: selectedPort,
     };
   }
 
+  sendUploadProgress(event, "done", "Programme installe sur l'ESP32.");
   return {
-    ok: result.ok,
-    exitCode: result.exitCode,
-    output: "Projet: " + projectPath + "\nCommande: " + command + " " + args.join(" ") + "\nCore PlatformIO: " + privateCoreDir + "\n\n" + platformio.output + "\n" + result.output,
-    projectPath,
+    ok: true,
+    exitCode: 0,
+    output: [
+      "ESP32 detecte sur " + selectedPort + ".",
+      "Programme compile pour " + board.label + ".",
+      "Televersement termine avec succes.",
+      "La carte redemarre automatiquement.",
+    ].join("\n"),
+    projectPath: sketchRoot,
+    port: selectedPort,
   };
 });

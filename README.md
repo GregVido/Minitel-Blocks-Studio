@@ -11,6 +11,8 @@ Minitel Blocks Studio permet de créer des programmes pour un ESP32 qui pilote u
 3. Lance le fichier téléchargé et suis l'installation.
 4. Ouvre l'application depuis le menu Démarrer ou le raccourci du bureau.
 
+L'installateur contient tout le nécessaire pour préparer et envoyer un programme vers l'ESP32. Arduino et PlatformIO ne sont pas requis.
+
 ## Découvrir l'interface
 
 L'application est organisée en trois zones :
@@ -79,10 +81,16 @@ La simulation suit le format d'écran choisi dans le projet.
 1. Branche l'ESP32 avec un câble USB adapté aux données.
 2. Ouvre l'onglet **ESP32**.
 3. Choisis le modèle de carte.
-4. Laisse le port en détection automatique, sauf si tu souhaites en indiquer un.
+4. Le port apparaît automatiquement dès que la carte est reconnue.
 5. Clique sur **Envoyer à l'ESP32**.
 
-La première utilisation peut demander une connexion Internet pour préparer automatiquement l'envoi. Selon la carte, Windows peut aussi demander son pilote USB.
+La progression affiche successivement la connexion, la compilation et l'envoi. Selon la carte, Windows peut demander une seule fois son pilote USB.
+
+## Exporter vers Arduino
+
+Le bouton **Exporter** crée un dossier Arduino complet. Il contient le programme et la bibliothèque Minitel personnalisée : aucune bibliothèque supplémentaire n'est à rechercher ou à installer.
+
+Cet export est optionnel. Il sert uniquement à ouvrir ou modifier le programme dans Arduino IDE ; l'envoi direct depuis Minitel Blocks Studio fonctionne sans Arduino.
 
 ## Raccourcis
 

@@ -6,3 +6,5 @@ npm-debug.log*
 *.local
 release
 release-*
+resources/esp32-toolchain/
+build/toolchain-cache/

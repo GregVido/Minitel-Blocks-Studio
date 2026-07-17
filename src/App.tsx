@@ -20,6 +20,7 @@ import Pause from "lucide-react/dist/esm/icons/pause.js";
 import Play from "lucide-react/dist/esm/icons/play.js";
 import Plus from "lucide-react/dist/esm/icons/plus.js";
 import Radio from "lucide-react/dist/esm/icons/radio.js";
+import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw.js";
 import Redo2 from "lucide-react/dist/esm/icons/redo-2.js";
 import Repeat from "lucide-react/dist/esm/icons/repeat.js";
 import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw.js";
@@ -230,7 +231,10 @@ type UploadResult = {
   output: string;
   projectPath?: string;
   exitCode?: number;
+  port?: string;
 };
+
+type UploadStage = "idle" | "detect" | "compile" | "upload" | "done" | "error";
 
 type BlockStyle = CSSProperties & {
   "--block-color": string;
@@ -2049,7 +2053,11 @@ function App() {
   const activeDropKeyRef = useRef("");
   const [board, setBoard] = useState("esp32dev");
   const [uploadPort, setUploadPort] = useState("");
-  const [uploadOutput, setUploadOutput] = useState("Prêt pour PlatformIO");
+  const [serialPorts, setSerialPorts] = useState<SerialPortInfo[]>([]);
+  const [portsLoading, setPortsLoading] = useState(false);
+  const [engineReady, setEngineReady] = useState<boolean | null>(null);
+  const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
+  const [uploadOutput, setUploadOutput] = useState("Branche ton ESP32 : le port sera détecté automatiquement.");
   const [uploading, setUploading] = useState(false);
 
   const activeStackId = selectedStackId || stacks[0]?.id || "";
@@ -2356,6 +2364,28 @@ function App() {
     setSimulatedKeys([]);
   }
 
+  async function refreshSerialPorts(silent = false) {
+    const bridge = window.minitelStudio;
+    if (!bridge?.listSerialPorts) return;
+    if (!silent) setPortsLoading(true);
+    try {
+      const result = await bridge.listSerialPorts();
+      setSerialPorts(result.ports);
+      setEngineReady(result.engineReady);
+      setUploadPort((current) => {
+        if (current && result.ports.some((port) => port.path === current)) return current;
+        return result.ports[0]?.path || "";
+      });
+      if (!silent && result.ports.length === 0) {
+        setUploadOutput("Aucun port détecté. Branche l'ESP32 avec un câble USB de données.");
+      }
+    } catch (error) {
+      if (!silent) setUploadOutput("La recherche des ports a échoué : " + String(error));
+    } finally {
+      if (!silent) setPortsLoading(false);
+    }
+  }
+
   useEffect(() => {
     if (!simRunning) return undefined;
     const timer = window.setInterval(() => setSimTick((current) => current + 1), simSpeed);
@@ -2402,6 +2432,24 @@ function App() {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
     window.addEventListener("dragover", handleDragOver);
     return () => window.removeEventListener("dragover", handleDragOver);
+  }, []);
+
+  useEffect(() => {
+    if (rightTab !== "upload" || !window.minitelStudio?.listSerialPorts) return undefined;
+    void refreshSerialPorts(false);
+    const timer = window.setInterval(() => void refreshSerialPorts(true), 3000);
+    return () => window.clearInterval(timer);
+  }, [rightTab]);
+
+  useEffect(() => {
+    const unsubscribe = window.minitelStudio?.onUploadProgress?.((progress) => {
+      setUploadStage(progress.stage);
+      setUploadOutput((current) => {
+        const base = current.startsWith("Préparation") ? "" : current.trim();
+        return (base ? base + "\n" : "") + progress.message;
+      });
+    });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -2704,10 +2752,10 @@ function App() {
   }
 
   async function exportSketch() {
-    if (window.minitelStudio?.saveArduinoSketch) {
-      const result = await window.minitelStudio.saveArduinoSketch("MinitelBlocks.ino", generatedCode);
+    if (window.minitelStudio?.exportArduinoProject) {
+      const result = await window.minitelStudio.exportArduinoProject({ projectName: "MinitelBlocks", code: generatedCode });
       if (result.ok) {
-        flashNotice("Sketch exporté");
+        flashNotice("Projet Arduino complet exporté");
         return;
       }
       if (result.canceled) {
@@ -2722,16 +2770,21 @@ function App() {
   async function uploadSketch() {
     setRightTab("upload");
     if (!window.minitelStudio?.uploadToEsp32) {
-      setUploadOutput("Le téléversement direct est disponible dans Electron.");
+      setUploadOutput("Le téléversement direct est disponible dans l'application installée.");
       return;
     }
     setUploading(true);
-    setUploadOutput("Préparation du projet PlatformIO...\n");
+    setUploadStage("detect");
+    setUploadOutput("Préparation du téléversement...");
     try {
       const result: UploadResult = await window.minitelStudio.uploadToEsp32({ code: generatedCode, board, port: uploadPort.trim() });
+      if (result.port) setUploadPort(result.port);
+      setUploadStage(result.ok ? "done" : "error");
       setUploadOutput(result.output || (result.ok ? "Téléversement terminé" : "Téléversement impossible"));
       flashNotice(result.ok ? "Téléversement terminé" : "Téléversement échoué");
+      void refreshSerialPorts(true);
     } catch (error) {
+      setUploadStage("error");
       setUploadOutput(String(error));
       flashNotice("Téléversement échoué");
     } finally {
@@ -2860,8 +2913,26 @@ function App() {
               <div className="section-title compact"><Terminal size={17} /><span>Téléversement direct</span></div>
               <div className="upload-form">
                 <label><Settings2 size={15} /><span>Carte</span><select value={board} onChange={(event) => setBoard(event.target.value)}><option value="esp32dev">ESP32 Dev Module</option><option value="nodemcu-32s">NodeMCU-32S</option><option value="esp32doit-devkit-v1">DOIT ESP32 DevKit V1</option></select></label>
-                <label><Usb size={15} /><span>Port</span><input value={uploadPort} onChange={(event) => setUploadPort(event.target.value)} placeholder="Détection automatique" /></label>
-                <button type="button" className="upload-button" onClick={uploadSketch} disabled={uploading}><Upload size={17} /><span>{uploading ? "Téléversement..." : "Envoyer à l'ESP32"}</span></button>
+                <div className="port-picker">
+                  <div className="port-picker-label">
+                    <span><Usb size={15} />Port détecté</span>
+                    <button type="button" onClick={() => void refreshSerialPorts(false)} disabled={portsLoading} title="Actualiser les ports"><RefreshCw className={portsLoading ? "spinning" : ""} size={15} /></button>
+                  </div>
+                  <select value={uploadPort} onChange={(event) => setUploadPort(event.target.value)} aria-label="Port série">
+                    {serialPorts.length === 0 ? <option value="">{portsLoading ? "Recherche..." : "Aucun port détecté"}</option> : null}
+                    {serialPorts.map((port) => <option value={port.path} key={port.path}>{port.path + " · " + port.label}</option>)}
+                  </select>
+                  <div className={"port-status " + (engineReady === false ? "error" : serialPorts.length > 0 ? "connected" : "waiting")}>
+                    <span aria-hidden="true" />
+                    {engineReady === false ? "Moteur ESP32 indisponible" : serialPorts.length > 0 ? (serialPorts.find((port) => port.path === uploadPort)?.likelyEsp32 ? "ESP32 reconnu automatiquement" : "Port prêt") : "Branche un ESP32"}
+                  </div>
+                </div>
+                <div className={"upload-steps stage-" + uploadStage} aria-label="Progression du téléversement">
+                  <span className="step-detect"><i />Connexion</span>
+                  <span className="step-compile"><i />Compilation</span>
+                  <span className="step-upload"><i />Envoi</span>
+                </div>
+                <button type="button" className="upload-button" onClick={uploadSketch} disabled={uploading || engineReady === false}><Upload size={17} /><span>{uploading ? "Téléversement..." : "Envoyer à l'ESP32"}</span></button>
               </div>
               <pre className="terminal-output">{uploadOutput}</pre>
             </div>

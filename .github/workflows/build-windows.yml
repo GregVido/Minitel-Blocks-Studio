@@ -28,6 +28,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Cache embedded ESP32 engine
+        uses: actions/cache@v4
+        with:
+          path: |
+            resources/esp32-toolchain
+            build/toolchain-cache
+          key: esp32-engine-windows-x64-cli-1.5.1-core-3.3.8-classic-v1
+
       - name: Build Windows installer
         run: npm run dist:win
 
@@ -37,6 +45,7 @@ jobs:
           name: Minitel-Blocks-Studio-Windows
           path: release/*.exe
           if-no-files-found: error
+          compression-level: 0
 
       - name: Attach installer to GitHub release
         if: github.event_name == 'release'

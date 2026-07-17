@@ -1700,3 +1700,162 @@ textarea:focus-visible {
 .category-button {
   flex: 0 0 auto;
 }
+
+
+/* Embedded ESP32 engine */
+.port-picker {
+  display: grid;
+  gap: 7px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.port-picker-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #354258;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.port-picker-label > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.port-picker-label button {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #d8e1ec;
+  border-radius: 6px;
+  background: #f7f9fc;
+  color: #41516a;
+}
+
+.port-picker-label button:hover:not(:disabled) {
+  border-color: #93bdf7;
+  color: #1769d2;
+  background: #edf5ff;
+}
+
+.port-picker select {
+  width: 100%;
+  height: 34px;
+  border: 1px solid #d8e1ec;
+  border-radius: 6px;
+  background: #f7f9fc;
+}
+
+.port-status {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #68778d;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.port-status > span {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: #9aa8ba;
+  box-shadow: 0 0 0 3px rgba(154, 168, 186, 0.16);
+}
+
+.port-status.connected {
+  color: #117348;
+}
+
+.port-status.connected > span {
+  background: #23a968;
+  box-shadow: 0 0 0 3px rgba(35, 169, 104, 0.16);
+  animation: portReadyPulse 1.8s ease-in-out infinite;
+}
+
+.port-status.error {
+  color: #b3263b;
+}
+
+.port-status.error > span {
+  background: #db4054;
+  box-shadow: 0 0 0 3px rgba(219, 64, 84, 0.15);
+}
+
+.upload-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.upload-steps > span {
+  min-width: 0;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #dce4ee;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #8794a7;
+  font-size: 10px;
+  font-weight: 850;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.upload-steps i {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.upload-steps.stage-detect .step-detect,
+.upload-steps.stage-compile .step-compile,
+.upload-steps.stage-upload .step-upload {
+  border-color: #8dbaf6;
+  background: #eaf3ff;
+  color: #1769d2;
+  animation: activeUploadStep 1.2s ease-in-out infinite;
+}
+
+.upload-steps.stage-compile .step-detect,
+.upload-steps.stage-upload .step-detect,
+.upload-steps.stage-upload .step-compile,
+.upload-steps.stage-done > span {
+  border-color: #a8dbc2;
+  background: #edfaf3;
+  color: #13764a;
+}
+
+.upload-steps.stage-error > span {
+  border-color: #f0bdc4;
+  background: #fff1f3;
+  color: #b3263b;
+}
+
+.spinning {
+  animation: uploadSpin 700ms linear infinite;
+}
+
+@keyframes portReadyPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+@keyframes activeUploadStep {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}

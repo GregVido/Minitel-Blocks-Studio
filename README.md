@@ -36,6 +36,16 @@ Chaque bloc propose des commandes pour :
 - le supprimer ;
 - modifier directement ses textes, nombres, couleurs, variables ou conditions.
 
+Dans la catégorie **Avancé**, le bloc **régler la vitesse** permet de choisir 300, 1200, 4800 ou 9600 bauds. Place-le dans la pile de démarrage à l'endroit où le changement doit avoir lieu. Le débit sélectionné apparaît aussi dans la simulation.
+
+## Sauvegarder et retrouver un projet
+
+Le bouton **Sauvegarder** crée un fichier de projet `.mbs`. Il conserve les blocs et leur ordre, les variables, le modèle de Minitel, les éléments placés dans l'éditeur d'écran et le modèle d'ESP32 choisi.
+
+Le bouton **Ouvrir** restaure ce fichier dans l'application. Le projet précédent reste accessible avec **Annuler** juste après l'ouverture d'un autre projet.
+
+Un fichier `.mbs` peut être déplacé sur une clé USB, envoyé à une autre personne ou conservé comme copie de sécurité.
+
 ## Composer l'écran visuellement
 
 Passe de **Blocs** à **Écran** dans la barre située au-dessus de l'espace central.
@@ -88,12 +98,14 @@ La progression affiche successivement la connexion, la compilation et l'envoi. S
 
 ## Exporter vers Arduino
 
-Le bouton **Exporter** crée un dossier Arduino complet. Il contient le programme et la bibliothèque Minitel personnalisée : aucune bibliothèque supplémentaire n'est à rechercher ou à installer.
+Le bouton **Arduino** crée un dossier Arduino complet. Il contient le programme et la bibliothèque Minitel personnalisée : aucune bibliothèque supplémentaire n'est à rechercher ou à installer.
 
 Cet export est optionnel. Il sert uniquement à ouvrir ou modifier le programme dans Arduino IDE ; l'envoi direct depuis Minitel Blocks Studio fonctionne sans Arduino.
 
 ## Raccourcis
 
+- `Ctrl+S` : sauvegarder le projet.
+- `Ctrl+O` : ouvrir un projet.
 - `Ctrl+Z` : annuler.
 - `Ctrl+Y` ou `Ctrl+Shift+Z` : rétablir.
 - `Échap` : annuler un déplacement ou fermer la fenêtre des exemples.

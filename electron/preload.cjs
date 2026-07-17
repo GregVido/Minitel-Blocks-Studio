@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("minitelStudio", {
+  exportProject: ({ suggestedName, contents }) =>
+    ipcRenderer.invoke("export-project", { suggestedName, contents }),
+  importProject: () => ipcRenderer.invoke("import-project"),
   exportArduinoProject: ({ projectName, code }) =>
     ipcRenderer.invoke("export-arduino-project", { projectName, code }),
   listSerialPorts: () => ipcRenderer.invoke("list-serial-ports"),

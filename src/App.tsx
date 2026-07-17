@@ -9,6 +9,7 @@ import Download from "lucide-react/dist/esm/icons/download.js";
 import Eraser from "lucide-react/dist/esm/icons/eraser.js";
 import Eye from "lucide-react/dist/esm/icons/eye.js";
 import FileCode2 from "lucide-react/dist/esm/icons/file-code-2.js";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open.js";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch.js";
 import GripVertical from "lucide-react/dist/esm/icons/grip-vertical.js";
 import Keyboard from "lucide-react/dist/esm/icons/keyboard.js";
@@ -25,6 +26,7 @@ import Redo2 from "lucide-react/dist/esm/icons/redo-2.js";
 import Repeat from "lucide-react/dist/esm/icons/repeat.js";
 import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw.js";
 import Settings2 from "lucide-react/dist/esm/icons/settings-2.js";
+import Save from "lucide-react/dist/esm/icons/save.js";
 import Sigma from "lucide-react/dist/esm/icons/sigma.js";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles.js";
 import StepForward from "lucide-react/dist/esm/icons/step-forward.js";
@@ -156,6 +158,14 @@ type ProjectSnapshot = {
   sceneElements: SceneElement[];
 };
 
+type ProjectFile = {
+  format: "minitel-blocks-studio";
+  version: 1;
+  savedAt: string;
+  board: string;
+  project: ProjectSnapshot;
+};
+
 type HistoryState = {
   past: ProjectSnapshot[];
   future: ProjectSnapshot[];
@@ -222,6 +232,7 @@ type PreviewState = {
   fg: string;
   bg: string;
   textSize: string;
+  baudRate: number;
   messages: string[];
   variables: Record<string, number>;
 };
@@ -264,6 +275,8 @@ const DRAG_TYPE = "application/minitel-block";
 const DELETE_ANIMATION_MS = 260;
 const BLOCK_MOTION_MS = 430;
 const HISTORY_LIMIT = 80;
+const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
+const PROJECT_FILE_VERSION = 1;
 
 const uid = () => "id-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
 const num = (value: number): Expr => ({ kind: "literal", valueType: "number", value });
@@ -389,6 +402,13 @@ const keyOptions: SelectOption[] = [
   { label: "Retour", value: "Backspace" },
 ];
 
+const baudOptions: SelectOption[] = [
+  { label: "300 bauds", value: "300" },
+  { label: "1200 bauds", value: "1200" },
+  { label: "4800 bauds", value: "4800" },
+  { label: "9600 bauds", value: "9600" },
+];
+
 const categories: Category[] = [
   { id: "start", label: "Départ", accent: "#ffb703", icon: Play },
   { id: "screen", label: "Écran", accent: "#2785ff", icon: Monitor },
@@ -492,6 +512,7 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "bottomRight", label: "BD", type: "boolean", defaultValue: false, compact: true },
   ] },
 
+  { id: "set-baud", title: "régler la vitesse", help: "Choisit le débit utilisé pour communiquer avec le Minitel.", kind: "action", category: "advanced", color: "#5d6679", inputs: [{ key: "baud", label: "débit", type: "select", defaultValue: "1200", options: baudOptions }] },
   { id: "detect-baud", title: "détecter la vitesse", help: "Teste 1200, 300, 4800 et 9600 bauds comme dans la librairie.", kind: "action", category: "advanced", color: "#5d6679" },
   { id: "reset-protocol", title: "reset protocole Minitel", help: "Envoie ESC PRO1 RESET au terminal.", kind: "action", category: "advanced", color: "#5d6679" },
 ];
@@ -500,6 +521,216 @@ const blockById = blockDefinitions.reduce<Record<string, BlockDefinition>>((accu
   accumulator[definition.id] = definition;
   return accumulator;
 }, {});
+
+
+const supportedProjectBoards = new Set(["esp32dev", "nodemcu-32s", "esp32doit-devkit-v1"]);
+const supportedSceneColors = new Set(["Black", "Red", "Green", "Yellow", "Blue", "Magenta", "Cyan", "White"]);
+const supportedTextSizes = new Set(["Normal", "DoubleHeight", "DoubleWidth", "DoubleSize"]);
+const supportedScreenPresets = new Set(["minitel-40", "small-32", "compact", "custom"]);
+
+function importedRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function normalizeImportedNumberExpr(value: unknown, fallback: Expr = num(0)): Expr {
+  const record = importedRecord(value);
+  if (!record) {
+    const numericValue = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+    return Number.isFinite(numericValue) ? num(numericValue) : cloneValue(fallback);
+  }
+  if (record.kind === "literal") {
+    const numericValue = Number(record.value);
+    return Number.isFinite(numericValue) ? num(numericValue) : cloneValue(fallback);
+  }
+  if (record.kind === "variable" && typeof record.name === "string" && record.name.trim()) {
+    return variableExpr(record.name.trim().slice(0, 64));
+  }
+  if (record.kind === "binary" && ["+", "-", "*", "/", "%"].includes(String(record.op))) {
+    return {
+      kind: "binary",
+      valueType: "number",
+      op: String(record.op) as BinaryExpr["op"],
+      left: normalizeImportedNumberExpr(record.left),
+      right: normalizeImportedNumberExpr(record.right),
+    };
+  }
+  return cloneValue(fallback);
+}
+
+function normalizeImportedCondition(value: unknown, fallback: Expr): Expr {
+  const record = importedRecord(value);
+  if (record?.kind === "compare" && ["==", "!=", "<", "<=", ">", ">="].includes(String(record.op))) {
+    return compareExpr(
+      normalizeImportedNumberExpr(record.left),
+      String(record.op) as CompareExpr["op"],
+      normalizeImportedNumberExpr(record.right),
+    );
+  }
+  return cloneValue(fallback);
+}
+
+function normalizeImportedValues(definition: BlockDefinition, value: unknown): Values {
+  const source = importedRecord(value);
+  const values = defaultValues(definition);
+  definition.inputs?.forEach((input) => {
+    const importedValue = source?.[input.key];
+    if (importedValue === undefined) return;
+    if (input.type === "number") {
+      values[input.key] = normalizeImportedNumberExpr(importedValue, input.defaultValue as Expr);
+      return;
+    }
+    if (input.type === "condition") {
+      values[input.key] = normalizeImportedCondition(importedValue, input.defaultValue as Expr);
+      return;
+    }
+    if (input.type === "boolean") {
+      values[input.key] = importedValue === true || importedValue === "true";
+      return;
+    }
+    if (input.type === "text") {
+      if (["string", "number", "boolean"].includes(typeof importedValue)) values[input.key] = String(importedValue).slice(0, 1024);
+      return;
+    }
+    if (input.type === "variable") {
+      if (typeof importedValue === "string" && importedValue.trim()) values[input.key] = importedValue.trim().slice(0, 64);
+      return;
+    }
+    const optionValue = typeof importedValue === "string" ? importedValue : String(importedValue);
+    if (input.options?.some((option) => option.value === optionValue)) values[input.key] = optionValue;
+  });
+  return values;
+}
+
+function normalizeImportedBlock(value: unknown): ProgramBlock | null {
+  const source = importedRecord(value);
+  const definition = source && typeof source.definitionId === "string" ? blockById[source.definitionId] : undefined;
+  if (!definition || definition.kind === "event" || definition.kind === "value") return null;
+  const hasChildren = definition.slots?.some((slot) => slot.key === "children");
+  const hasElseChildren = definition.slots?.some((slot) => slot.key === "elseChildren");
+  return {
+    id: uid(),
+    definitionId: definition.id,
+    values: normalizeImportedValues(definition, source?.values),
+    children: hasChildren ? normalizeImportedBlocks(source?.children) : undefined,
+    elseChildren: hasElseChildren ? normalizeImportedBlocks(source?.elseChildren) : undefined,
+  };
+}
+
+function normalizeImportedBlocks(value: unknown): ProgramBlock[] {
+  return (Array.isArray(value) ? value : []).map(normalizeImportedBlock).filter((block): block is ProgramBlock => block !== null);
+}
+
+function normalizeImportedStack(value: unknown): ScriptStack | null {
+  const source = importedRecord(value);
+  const eventSource = importedRecord(source?.event);
+  const definition = eventSource && typeof eventSource.definitionId === "string" ? blockById[eventSource.definitionId] : undefined;
+  if (!definition || definition.kind !== "event") return null;
+  return {
+    id: uid(),
+    event: { definitionId: definition.id, values: normalizeImportedValues(definition, eventSource?.values) },
+    blocks: normalizeImportedBlocks(source?.blocks),
+  };
+}
+
+function normalizeImportedVariables(value: unknown): VariableDef[] {
+  const usedNames = new Set<string>();
+  const variables = (Array.isArray(value) ? value : []).flatMap((item) => {
+    const source = importedRecord(item);
+    if (!source || typeof source.name !== "string" || !source.name.trim()) return [];
+    const baseName = source.name.trim().slice(0, 64);
+    let name = baseName;
+    let suffix = 2;
+    while (usedNames.has(name)) {
+      name = baseName.slice(0, 58) + "_" + suffix;
+      suffix += 1;
+    }
+    usedNames.add(name);
+    return [{ id: uid(), name, defaultValue: normalizeImportedNumberExpr(source.defaultValue) }];
+  });
+  return variables.length > 0 ? variables : createDefaultVariables();
+}
+
+function normalizeImportedScreenConfig(value: unknown): MinitelScreenConfig {
+  const source = importedRecord(value);
+  const fallback = createDefaultScreenConfig();
+  const preset = typeof source?.preset === "string" && supportedScreenPresets.has(source.preset) ? source.preset as MinitelScreenConfig["preset"] : fallback.preset;
+  const name = typeof source?.name === "string" && source.name.trim() ? source.name.trim().slice(0, 80) : fallback.name;
+  const columnsValue = Number(source?.columns);
+  const rowsValue = Number(source?.rows);
+  return {
+    preset,
+    name,
+    columns: Number.isFinite(columnsValue) ? clamp(columnsValue, 8, 80) : fallback.columns,
+    rows: Number.isFinite(rowsValue) ? clamp(rowsValue, 8, 40) : fallback.rows,
+  };
+}
+
+function normalizeSceneColor(value: unknown, fallback: SceneElement["fg"]): SceneElement["fg"] {
+  return typeof value === "string" && supportedSceneColors.has(value) ? value as SceneElement["fg"] : fallback;
+}
+
+function normalizeImportedSceneElements(value: unknown, config: MinitelScreenConfig): SceneElement[] {
+  const elements = (Array.isArray(value) ? value : []).flatMap((item): SceneElement[] => {
+    const source = importedRecord(item);
+    if (!source || typeof source.kind !== "string") return [];
+    const xValue = Number(source.x);
+    const yValue = Number(source.y);
+    const x = Number.isFinite(xValue) ? clamp(xValue, 1, config.columns) : 1;
+    const y = Number.isFinite(yValue) ? clamp(yValue, 1, config.rows) : 1;
+    const fg = normalizeSceneColor(source.fg, "White");
+    if (source.kind === "text") {
+      const bg = normalizeSceneColor(source.bg, "Black");
+      const size = typeof source.size === "string" && supportedTextSizes.has(source.size) ? source.size as "Normal" | "DoubleHeight" | "DoubleWidth" | "DoubleSize" : "Normal";
+      return [{ id: uid(), kind: "text", text: typeof source.text === "string" ? source.text.slice(0, 1024) : "Texte", x, y, fg, bg, size }];
+    }
+    const widthValue = Number(source.width);
+    const heightValue = Number(source.height);
+    const width = Number.isFinite(widthValue) ? clamp(widthValue, 1, config.columns) : 1;
+    const height = Number.isFinite(heightValue) ? clamp(heightValue, 1, config.rows) : 1;
+    if (source.kind === "box") {
+      return [{ id: uid(), kind: "box", x, y, width, height, fg, filled: source.filled === true }];
+    }
+    if (source.kind === "image") {
+      const expectedLength = width * 2 * height * 3;
+      const bitmap = (typeof source.bitmap === "string" ? source.bitmap.replace(/[^01]/g, "") : "").slice(0, expectedLength).padEnd(expectedLength, "0");
+      const name = typeof source.name === "string" && source.name.trim() ? source.name.trim().slice(0, 80) : "Image";
+      return [{ id: uid(), kind: "image", name, x, y, width, height, bitmap, fg }];
+    }
+    return [];
+  });
+  return fitElementsToScreen(elements, config);
+}
+
+function serializeProjectFile(snapshot: ProjectSnapshot, board: string) {
+  const document: ProjectFile = {
+    format: PROJECT_FILE_FORMAT,
+    version: PROJECT_FILE_VERSION,
+    savedAt: new Date().toISOString(),
+    board: supportedProjectBoards.has(board) ? board : "esp32dev",
+    project: cloneProjectSnapshot(snapshot),
+  };
+  return JSON.stringify(document, null, 2);
+}
+
+function parseProjectFile(contents: string): { project: ProjectSnapshot; board: string } {
+  const parsed = JSON.parse(contents) as unknown;
+  const document = importedRecord(parsed);
+  if (!document) throw new Error("Ce fichier ne contient pas de projet.");
+  if (document.format !== undefined && document.format !== PROJECT_FILE_FORMAT) throw new Error("Ce fichier appartient à une autre application.");
+  if (typeof document.version === "number" && document.version > PROJECT_FILE_VERSION) throw new Error("Ce projet a été créé avec une version plus récente.");
+  const projectSource = importedRecord(document.project) ?? document;
+  if (!Array.isArray(projectSource.stacks)) throw new Error("Les blocs du projet sont absents.");
+  const screenConfig = normalizeImportedScreenConfig(projectSource.screenConfig);
+  const stacks = projectSource.stacks.map(normalizeImportedStack).filter((stack): stack is ScriptStack => stack !== null);
+  const project: ProjectSnapshot = {
+    stacks: stacks.length > 0 ? stacks : createBlankStacks(),
+    variables: normalizeImportedVariables(projectSource.variables),
+    screenConfig,
+    sceneElements: normalizeImportedSceneElements(projectSource.sceneElements, screenConfig),
+  };
+  const board = typeof document.board === "string" && supportedProjectBoards.has(document.board) ? document.board : "esp32dev";
+  return { project, board };
+}
 
 const previewColors: Record<string, string> = {
   Black: "#11131a",
@@ -963,6 +1194,11 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "minitel.drawMosaicCell(" + (boolValue(values.topLeft, true) ? "true" : "false") + ", " + (boolValue(values.topRight, true) ? "true" : "false") + ", " + (boolValue(values.middleLeft, true) ? "true" : "false") + ", " + (boolValue(values.middleRight, false) ? "true" : "false") + ", " + (boolValue(values.bottomLeft, true) ? "true" : "false") + ", " + (boolValue(values.bottomRight, false) ? "true" : "false") + ");");
         pushLine(lines, indent, "minitel.textMode();");
         break;
+      case "set-baud": {
+        const baud = baudOptions.some((option) => option.value === textValue(values.baud, "1200")) ? textValue(values.baud, "1200") : "1200";
+        pushLine(lines, indent, "minitel.setBaudRate(" + baud + ");");
+        break;
+      }
       case "detect-baud":
         pushLine(lines, indent, "{");
         pushLine(lines, indent + 2, "uint32_t detectedBaud = minitel.detectBaudRate();");
@@ -1077,7 +1313,7 @@ function createPreviewState(variables: VariableDef[], screenConfig: MinitelScree
   variables.forEach((variable) => {
     values[variable.name] = exprPreviewNumber(variable.defaultValue, values, 0);
   });
-  return { cells: emptyPreviewCells(screenConfig.columns, screenConfig.rows), columns: screenConfig.columns, rows: screenConfig.rows, cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", messages: [], variables: values };
+  return { cells: emptyPreviewCells(screenConfig.columns, screenConfig.rows), columns: screenConfig.columns, rows: screenConfig.rows, cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", baudRate: 1200, messages: [], variables: values };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -1240,8 +1476,15 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         setCursor(state, exprPreviewNumber(values.column, state.variables, 10), exprPreviewNumber(values.row, state.variables, 10));
         setPreviewCell(state, state.cursorColumn, state.cursorRow, "█");
         break;
+      case "set-baud": {
+        const baud = Number(textValue(values.baud, "1200"));
+        state.baudRate = baudOptions.some((option) => Number(option.value) === baud) ? baud : 1200;
+        state.messages.push("Débit : " + state.baudRate + " bauds");
+        break;
+      }
       case "detect-baud":
-        state.messages.push("Vitesse détectée");
+        state.baudRate = 1200;
+        state.messages.push("Vitesse détectée : 1200 bauds");
         break;
       case "reset-protocol":
         state.messages.push("Reset protocole envoyé");
@@ -2402,10 +2645,19 @@ function App() {
         if (examplesOpen) setExamplesOpen(false);
         return;
       }
-      if (isTyping) return;
-
       if (event.ctrlKey || event.metaKey) {
         const key = event.key.toLowerCase();
+        if (key === "s") {
+          event.preventDefault();
+          void saveProject();
+          return;
+        }
+        if (key === "o") {
+          event.preventDefault();
+          void openProject();
+          return;
+        }
+        if (isTyping) return;
         if (key === "z") {
           event.preventDefault();
           if (event.shiftKey) redo();
@@ -2418,6 +2670,8 @@ function App() {
         return;
       }
 
+      if (isTyping) return;
+
       const simulatedKey = event.key === "Enter" || event.key === "Backspace" ? event.key : event.key.length === 1 ? event.key.toUpperCase() : "";
       if (rightTab === "preview" && keyOptions.some((option) => option.value === simulatedKey)) {
         event.preventDefault();
@@ -2426,7 +2680,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [examplesOpen, history, rightTab, sceneElements, screenConfig, stacks, variables]);
+  }, [board, examplesOpen, history, rightTab, sceneElements, screenConfig, stacks, variables]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -2736,6 +2990,95 @@ function App() {
     setVariables((current) => current.filter((variable) => variable.id !== id));
   }
 
+
+  function fallbackSaveProject(contents: string) {
+    const blob = new Blob([contents], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "Mon-projet-Minitel.mbs";
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  function fallbackOpenProject(): Promise<string | null> {
+    return new Promise((resolve, reject) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".mbs,application/json";
+      input.style.display = "none";
+      document.body.appendChild(input);
+      let settled = false;
+      const finish = (contents: string | null) => {
+        if (settled) return;
+        settled = true;
+        input.remove();
+        resolve(contents);
+      };
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) {
+          finish(null);
+          return;
+        }
+        file.text().then(finish).catch((error) => {
+          input.remove();
+          reject(error);
+        });
+      }, { once: true });
+      window.addEventListener("focus", () => window.setTimeout(() => {
+        if (!input.files?.length) finish(null);
+      }, 250), { once: true });
+      input.click();
+    });
+  }
+
+  async function saveProject() {
+    const contents = serializeProjectFile({ stacks, variables, screenConfig, sceneElements }, board);
+    try {
+      if (window.minitelStudio?.exportProject) {
+        const result = await window.minitelStudio.exportProject({ suggestedName: "Mon-projet-Minitel.mbs", contents });
+        if (result.canceled) {
+          flashNotice("Sauvegarde annulée");
+          return;
+        }
+        if (!result.ok) throw new Error(result.error || "La sauvegarde a échoué.");
+      } else {
+        fallbackSaveProject(contents);
+      }
+      flashNotice("Projet sauvegardé");
+    } catch (error) {
+      flashNotice(error instanceof Error ? error.message : "Impossible de sauvegarder le projet");
+    }
+  }
+
+  async function openProject() {
+    try {
+      let contents: string | null = null;
+      if (window.minitelStudio?.importProject) {
+        const result = await window.minitelStudio.importProject();
+        if (result.canceled) {
+          flashNotice("Ouverture annulée");
+          return;
+        }
+        if (!result.ok || !result.contents) throw new Error(result.error || "Impossible de lire ce projet.");
+        contents = result.contents;
+      } else {
+        contents = await fallbackOpenProject();
+      }
+      if (!contents) return;
+      const imported = parseProjectFile(contents);
+      pushHistory();
+      restoreSnapshot(imported.project);
+      setBoard(imported.board);
+      setWorkspaceMode(imported.project.sceneElements.length > 0 ? "designer" : "blocks");
+      setRightTab("preview");
+      flashNotice("Projet restauré");
+    } catch (error) {
+      flashNotice(error instanceof Error ? error.message : "Ce fichier de projet est invalide");
+    }
+  }
+
   async function copyCode() {
     await navigator.clipboard.writeText(generatedCode);
     flashNotice("Code copié");
@@ -2806,9 +3149,11 @@ function App() {
             <button type="button" className="tool-button icon-only" onClick={redo} disabled={history.future.length === 0} title="Rétablir (Ctrl+Y)"><Redo2 size={18} /></button>
           </div>
           <button type="button" className="tool-button" onClick={resetProgram} title="Nouveau programme"><Eraser size={18} /><span>Nouveau</span></button>
+          <button type="button" className="tool-button" onClick={() => void openProject()} title="Ouvrir un projet (Ctrl+O)"><FolderOpen size={18} /><span>Ouvrir</span></button>
+          <button type="button" className="tool-button" onClick={() => void saveProject()} title="Sauvegarder le projet (Ctrl+S)"><Save size={18} /><span>Sauvegarder</span></button>
           <button type="button" className="tool-button" onClick={() => setExamplesOpen(true)} title="Ouvrir les exemples"><Wand2 size={18} /><span>Exemples</span></button>
           <button type="button" className={"tool-button " + (workspaceMode === "designer" ? "active" : "")} onClick={() => setWorkspaceMode("designer")} title="Composer l'écran"><Monitor size={18} /><span>Écran</span></button>
-          <button type="button" className="tool-button" onClick={exportSketch} title="Exporter le programme"><Download size={18} /><span>Exporter</span></button>
+          <button type="button" className="tool-button" onClick={exportSketch} title="Exporter vers Arduino"><Download size={18} /><span>Arduino</span></button>
           <button type="button" className="tool-button primary" onClick={uploadSketch} title="Téléverser sur l'ESP32"><Upload size={18} /><span>Téléverser</span></button>
         </div>
       </header>
@@ -2894,7 +3239,7 @@ function App() {
                 </div>
               </div>
               <div className="event-strip">{preview.messages.slice(-6).map((message, index) => <span key={message + index}>{message}</span>)}</div>
-              <div className="sim-stats">{Object.entries(preview.variables).map(([name, value]) => <span key={name}>{name}: {value}</span>)}</div>
+              <div className="sim-stats"><span className="baud-stat">Débit : {preview.baudRate} bauds</span>{Object.entries(preview.variables).map(([name, value]) => <span key={name}>{name}: {value}</span>)}</div>
             </div>
           ) : null}
 
@@ -2902,7 +3247,7 @@ function App() {
             <div className="code-panel">
               <div className="code-toolbar">
                 <div className="section-title compact"><FileCode2 size={17} /><span>Programme généré</span></div>
-                <div className="code-actions"><button type="button" onClick={copyCode} title="Copier le code"><Copy size={16} /></button><button type="button" onClick={exportSketch} title="Exporter le programme"><Download size={16} /></button></div>
+                <div className="code-actions"><button type="button" onClick={copyCode} title="Copier le code"><Copy size={16} /></button><button type="button" onClick={exportSketch} title="Exporter vers Arduino"><Download size={16} /></button></div>
               </div>
               <pre className="code-output">{generatedCode}</pre>
             </div>

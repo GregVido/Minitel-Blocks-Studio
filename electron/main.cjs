@@ -259,6 +259,15 @@ function safeProjectName(value) {
   return cleaned || "MinitelBlocks";
 }
 
+function safeProjectFileName(value) {
+  const cleaned = path.basename(String(value || "Mon-projet-Minitel.mbs"))
+    .replace(/[^A-Za-z0-9._ -]+/g, "")
+    .trim()
+    .slice(0, 96);
+  const name = cleaned || "Mon-projet-Minitel.mbs";
+  return /\.mbs$/i.test(name) ? name : name + ".mbs";
+}
+
 function compactFailure(output) {
   const value = String(output || "Erreur inconnue").trim();
   return value.length > 12000 ? value.slice(-12000) : value;
@@ -294,6 +303,47 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+ipcMain.handle("export-project", async (_event, payload) => {
+  const contents = String(payload && payload.contents || "");
+  if (!contents.trim()) return { ok: false, error: "Le projet est vide." };
+  if (Buffer.byteLength(contents, "utf8") > 32 * 1024 * 1024) return { ok: false, error: "Le projet est trop volumineux." };
+  const result = await dialog.showSaveDialog({
+    title: "Sauvegarder le projet Minitel",
+    defaultPath: path.join(app.getPath("documents"), safeProjectFileName(payload && payload.suggestedName)),
+    buttonLabel: "Sauvegarder",
+    filters: [{ name: "Projet Minitel Blocks Studio", extensions: ["mbs"] }],
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  const filePath = /\.mbs$/i.test(result.filePath) ? result.filePath : result.filePath + ".mbs";
+  try {
+    await fs.writeFile(filePath, contents, "utf8");
+    return { ok: true, filePath };
+  } catch {
+    return { ok: false, error: "Impossible d'enregistrer le projet dans ce dossier." };
+  }
+});
+
+ipcMain.handle("import-project", async () => {
+  const result = await dialog.showOpenDialog({
+    title: "Ouvrir un projet Minitel",
+    buttonLabel: "Ouvrir",
+    properties: ["openFile"],
+    filters: [
+      { name: "Projet Minitel Blocks Studio", extensions: ["mbs"] },
+      { name: "Fichier JSON", extensions: ["json"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths[0]) return { ok: false, canceled: true };
+  try {
+    const filePath = result.filePaths[0];
+    const stats = await fs.stat(filePath);
+    if (stats.size > 32 * 1024 * 1024) return { ok: false, error: "Ce projet est trop volumineux." };
+    return { ok: true, filePath, contents: await fs.readFile(filePath, "utf8") };
+  } catch {
+    return { ok: false, error: "Impossible de lire ce fichier de projet." };
+  }
 });
 
 ipcMain.handle("list-serial-ports", async () => ({

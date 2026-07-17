@@ -875,6 +875,12 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.sim-stats .baud-stat {
+  border-color: #b9e0d9;
+  background: #eaf7f4;
+  color: #14665f;
+}
+
 .code-output,
 .terminal-output {
   min-height: 250px;

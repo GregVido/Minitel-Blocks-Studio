@@ -6,6 +6,14 @@ interface ExportArduinoProjectResult {
   filePath?: string;
 }
 
+interface ProjectFileResult {
+  ok: boolean;
+  canceled?: boolean;
+  filePath?: string;
+  contents?: string;
+  error?: string;
+}
+
 interface SerialPortInfo {
   path: string;
   label: string;
@@ -41,6 +49,8 @@ interface UploadProgress {
 
 interface Window {
   minitelStudio?: {
+    exportProject: (payload: { suggestedName: string; contents: string }) => Promise<ProjectFileResult>;
+    importProject: () => Promise<ProjectFileResult>;
     exportArduinoProject: (payload: { projectName: string; code: string }) => Promise<ExportArduinoProjectResult>;
     listSerialPorts: () => Promise<ListSerialPortsResult>;
     uploadToEsp32: (payload: UploadEsp32Payload) => Promise<UploadEsp32Result>;

@@ -99,6 +99,30 @@ L'onglet **Simulation** permet de vérifier le résultat avant l'envoi.
 
 La simulation suit le format d'écran choisi dans le projet.
 
+## Câbler l'ESP32 au Minitel
+
+![Schema de cablage](public/schema.png)
+
+Le logiciel utilise le port série `Serial2` de l'ESP32 avec les broches suivantes :
+
+- **GPIO 16** pour recevoir les données (`RX2`) ;
+- **GPIO 17** pour envoyer les données (`TX2`) ;
+- une broche **GND** pour la masse commune.
+
+Le raccordement se fait avec seulement trois fils soudés, sans résistance externe :
+
+```text
+ESP32                                  PRISE DIN DU MINITEL
+
+GND       --------------------------   broche 2 · GND
+GPIO 17   -------- TX2 ----------->    broche 1 · RX
+GPIO 16   <------- RX2 ------------    broche 3 · TX
+```
+
+RX et TX sont donc croisés : le fil qui part du TX de l'ESP32 arrive sur le RX du Minitel, et le TX du Minitel arrive sur le RX de l'ESP32.
+
+Ne raccorde rien aux broches 4 et 5 de la prise DIN. En particulier, ne relie aucune alimentation 3,3 V ou 5 V entre les deux appareils : seuls **GND, RX et TX** sont utilisés.
+
 ## Envoyer sur l'ESP32
 
 1. Branche l'ESP32 avec un câble USB adapté aux données.

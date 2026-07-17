@@ -155,6 +155,10 @@ Cet export est optionnel. Il sert uniquement à ouvrir ou modifier le programme 
 - Vérifie le branchement entre l'ESP32 et le Minitel si l'écran reste vide.
 - Commence avec un exemple, puis modifie-le petit à petit.
 
+## Remerciements
+
+Je remercie [Nat](https://github.com/NathaanTFM) pour son aide ainsi que pour son dépôt [NathaanTFM/minitel-project](https://github.com/NathaanTFM/minitel-project), qui m'ont permis de mieux comprendre le fonctionnement du Minitel.
+
 ## Licence
 
 Minitel Blocks Studio est distribué sous licence Apache-2.0.

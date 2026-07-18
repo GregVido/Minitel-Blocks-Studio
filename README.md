@@ -22,6 +22,12 @@ Minitel Blocks Studio permet de créer des programmes pour un ESP32 qui pilote u
 
 L'installateur contient tout le nécessaire pour préparer et envoyer un programme vers l'ESP32. Arduino et PlatformIO ne sont pas requis.
 
+## Profiter des mises à jour
+
+À chaque démarrage, l'application recherche discrètement une nouvelle version lorsqu'une connexion Internet est disponible.
+
+Si une mise à jour existe, elle se télécharge en arrière-plan sans interrompre le projet en cours. Une fois prête, l'application propose de redémarrer immédiatement ou de terminer l'installation plus tard. Aucun nouvel installateur n'est à rechercher manuellement.
+
 ## Découvrir l'interface
 
 L'application est organisée en trois zones :

@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const os = require("os");
 const fs = require("fs/promises");
@@ -6,6 +7,138 @@ const fsSync = require("fs");
 const { spawn, spawnSync } = require("child_process");
 
 const isDevelopment = !app.isPackaged;
+let updateState = {
+  status: isDevelopment ? "disabled" : "idle",
+  currentVersion: app.getVersion(),
+  message: isDevelopment ? "Mises a jour disponibles dans l'application installee." : "Verification au demarrage.",
+};
+let updaterConfigured = false;
+let updateReady = false;
+let updatePromptOpen = false;
+let startupUpdateTimer = null;
+
+function broadcastUpdateState() {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send("app-update-status", { ...updateState });
+    }
+  }
+}
+
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch, currentVersion: app.getVersion() };
+  broadcastUpdateState();
+  return { ...updateState };
+}
+
+function handleUpdaterError(error) {
+  console.error("Automatic update failed:", error);
+  return setUpdateState({
+    status: "error",
+    percent: undefined,
+    message: "Mise a jour indisponible. Clique pour reessayer.",
+  });
+}
+
+function installDownloadedUpdate() {
+  if (!updateReady) return { ...updateState };
+  setUpdateState({ status: "installing", message: "Redemarrage pour installer la mise a jour..." });
+  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+  return { ...updateState };
+}
+
+async function offerDownloadedUpdate() {
+  if (updatePromptOpen || !updateReady) return;
+  updatePromptOpen = true;
+  try {
+    const options = {
+      type: "info",
+      title: "Mise a jour prete",
+      message: "Une nouvelle version de Minitel Blocks Studio est prete.",
+      detail: "Version " + (updateState.version || "") + " telechargee. Redemarre l'application pour terminer l'installation.",
+      buttons: ["Redemarrer maintenant", "Plus tard"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    };
+    const parent = BrowserWindow.getAllWindows()[0];
+    const result = parent && !parent.isDestroyed()
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+    if (result.response === 0) {
+      installDownloadedUpdate();
+    } else {
+      setUpdateState({ status: "ready", message: "Mise a jour prete. Clique pour redemarrer." });
+    }
+  } finally {
+    updatePromptOpen = false;
+  }
+}
+
+function configureAutoUpdater() {
+  if (updaterConfigured || isDevelopment || process.platform !== "win32") return;
+  updaterConfigured = true;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = false;
+
+  autoUpdater.on("checking-for-update", () => {
+    setUpdateState({ status: "checking", percent: undefined, message: "Recherche d'une mise a jour..." });
+  });
+  autoUpdater.on("update-available", (info) => {
+    setUpdateState({
+      status: "available",
+      version: info.version,
+      percent: 0,
+      message: "Nouvelle version trouvee. Telechargement...",
+    });
+  });
+  autoUpdater.on("update-not-available", () => {
+    setUpdateState({
+      status: "up-to-date",
+      version: app.getVersion(),
+      percent: undefined,
+      message: "L'application est a jour.",
+    });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    const percent = Math.max(0, Math.min(100, Number(progress.percent) || 0));
+    setUpdateState({
+      status: "downloading",
+      percent,
+      message: "Mise a jour " + Math.round(percent) + " %",
+    });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    updateReady = true;
+    setUpdateState({
+      status: "ready",
+      version: info.version,
+      percent: 100,
+      message: "Mise a jour prete. Clique pour redemarrer.",
+    });
+    void offerDownloadedUpdate();
+  });
+  autoUpdater.on("error", handleUpdaterError);
+
+  startupUpdateTimer = setTimeout(() => {
+    void checkForAppUpdates();
+  }, 3000);
+}
+
+async function checkForAppUpdates() {
+  if (isDevelopment || process.platform !== "win32") return { ...updateState };
+  if (!updaterConfigured) configureAutoUpdater();
+  if (["checking", "available", "downloading", "installing"].includes(updateState.status)) return { ...updateState };
+  setUpdateState({ status: "checking", percent: undefined, message: "Recherche d'une mise a jour..." });
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    handleUpdaterError(error);
+  }
+  return { ...updateState };
+}
+
 const SUPPORTED_BOARDS = {
   esp32dev: { fqbn: "esp32:esp32:esp32", label: "ESP32 Dev Module" },
   "nodemcu-32s": { fqbn: "esp32:esp32:nodemcu-32s", label: "NodeMCU-32S" },
@@ -40,6 +173,11 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
   }
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send("app-update-status", { ...updateState });
+  });
+  return mainWindow;
 }
 
 function runCommand(command, args, cwd, extraEnv = {}) {
@@ -281,7 +419,10 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => {
+    createWindow();
+    configureAutoUpdater();
+  });
 }
 
 app.on("second-instance", () => {
@@ -292,6 +433,7 @@ app.on("second-instance", () => {
 });
 
 app.on("will-quit", () => {
+  if (startupUpdateTimer) clearTimeout(startupUpdateTimer);
   if (runtimeSubstOwned && runtimeSubstDrive) {
     spawnSync("subst.exe", [runtimeSubstDrive, "/D"], { windowsHide: true });
   }
@@ -304,6 +446,12 @@ app.on("window-all-closed", () => {
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
+
+ipcMain.handle("get-update-status", async () => ({ ...updateState }));
+
+ipcMain.handle("check-for-updates", async () => checkForAppUpdates());
+
+ipcMain.handle("install-update", async () => installDownloadedUpdate());
 
 ipcMain.handle("export-project", async (_event, payload) => {
   const contents = String(payload && payload.contents || "");

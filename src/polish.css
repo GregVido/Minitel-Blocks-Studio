@@ -176,6 +176,94 @@ textarea:focus-visible {
   opacity: 0.42;
 }
 
+.update-indicator {
+  position: relative;
+  min-width: 38px;
+  max-width: 210px;
+  height: 38px;
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 11px;
+  border: 1px solid #b8d5ca;
+  border-radius: 7px;
+  background: #eff9f5;
+  color: #176b58;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+  animation: updateStatusIn 240ms ease-out both;
+  transition: transform 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.update-indicator:not(:disabled) {
+  cursor: pointer;
+}
+
+.update-indicator:not(:disabled):hover {
+  transform: translateY(-1px);
+  border-color: #69ad99;
+  background: #e5f6ef;
+  box-shadow: 0 7px 16px rgba(20, 112, 88, 0.16);
+}
+
+.update-indicator:disabled {
+  cursor: default;
+}
+
+.update-indicator .update-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-indicator.status-checking,
+.update-indicator.status-available,
+.update-indicator.status-downloading {
+  border-color: #b8d3f4;
+  background: #edf5ff;
+  color: #175fae;
+}
+
+.update-indicator.status-error {
+  border-color: #ead49c;
+  background: #fff8e8;
+  color: #8a6107;
+}
+
+.update-indicator.status-ready {
+  border-color: #087862;
+  background: #13866f;
+  color: #ffffff;
+  box-shadow: 0 7px 16px rgba(19, 134, 111, 0.2);
+  animation: updateStatusIn 240ms ease-out both, updateReadyPulse 2.2s ease-in-out 500ms infinite;
+}
+
+.update-indicator.status-checking svg,
+.update-indicator.status-installing svg {
+  animation: updateSpin 1s linear infinite;
+}
+
+.update-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: rgba(23, 95, 174, 0.12);
+}
+
+.update-progress i {
+  display: block;
+  height: 100%;
+  border-radius: 0 3px 3px 0;
+  background: #2679ea;
+  transition: width 220ms ease-out;
+}
+
 .studio-grid {
   flex: 1 1 auto;
   min-height: 0;
@@ -1574,6 +1662,20 @@ textarea:focus-visible {
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+@keyframes updateStatusIn {
+  from { opacity: 0; transform: translateY(-5px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes updateSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes updateReadyPulse {
+  0%, 100% { box-shadow: 0 7px 16px rgba(19, 134, 111, 0.2); }
+  50% { box-shadow: 0 7px 20px rgba(19, 134, 111, 0.36); }
+}
+
 @media (max-width: 1420px) {
   .brand-copy {
     min-width: 170px;
@@ -1587,6 +1689,16 @@ textarea:focus-visible {
     width: 38px;
     min-width: 38px;
     padding: 0;
+  }
+
+  .update-indicator {
+    width: 38px;
+    min-width: 38px;
+    padding: 0;
+  }
+
+  .update-indicator .update-label {
+    display: none;
   }
 
   .studio-grid.blocks-mode {

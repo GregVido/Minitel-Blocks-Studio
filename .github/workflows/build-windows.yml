@@ -1,18 +1,16 @@
-name: Build Windows EXE
+name: Build and release Windows
 
 on:
   push:
     branches: [main, master]
   workflow_dispatch:
-  release:
-    types: [created]
 
 permissions:
   contents: write
 
 jobs:
   build-windows:
-    name: Build installer Windows
+    name: Build and publish Windows installer
     runs-on: windows-latest
 
     steps:
@@ -28,6 +26,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Choose release version
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $parts = $package.version -split '\.'
+          if ($parts.Length -lt 2) {
+            throw "The package version must contain a major and minor number."
+          }
+          $version = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
+          npm version $version --no-git-tag-version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to set release version $version."
+          }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Cache embedded ESP32 engine
         uses: actions/cache@v4
         with:
@@ -39,16 +52,36 @@ jobs:
       - name: Build Windows installer
         run: npm run dist:win
 
-      - name: Upload installer artifact
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v5
         with:
           name: Minitel-Blocks-Studio-Windows
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
           if-no-files-found: error
           compression-level: 0
 
-      - name: Attach installer to GitHub release
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v3
-        with:
-          files: release/*.exe
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-Item -Path "release/Minitel-Blocks-Studio-Setup-$env:APP_VERSION.exe"
+          $blockmap = Get-Item -Path "release/Minitel-Blocks-Studio-Setup-$env:APP_VERSION.exe.blockmap"
+          $latest = Get-Item -Path "release/latest.yml"
+          if (-not $installer -or -not $blockmap -or -not $latest) {
+            throw "One or more release files are missing."
+          }
+
+          $tag = "v$env:APP_VERSION"
+          gh release view $tag --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $installer.FullName $blockmap.FullName $latest.FullName --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create $tag $installer.FullName $blockmap.FullName $latest.FullName --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Minitel Blocks Studio $tag" --generate-notes --latest
+          }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to publish GitHub release $tag."
+          }

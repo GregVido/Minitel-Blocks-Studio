@@ -2302,6 +2302,7 @@ function App() {
   const [uploadStage, setUploadStage] = useState<UploadStage>("idle");
   const [uploadOutput, setUploadOutput] = useState("Branche ton ESP32 : le port sera détecté automatiquement.");
   const [uploading, setUploading] = useState(false);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
 
   const activeStackId = selectedStackId || stacks[0]?.id || "";
   const activeBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
@@ -2704,6 +2705,24 @@ function App() {
       });
     });
     return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    const bridge = window.minitelStudio;
+    if (!bridge?.getUpdateStatus || !bridge.onUpdateStatus) return undefined;
+    let active = true;
+    const unsubscribe = bridge.onUpdateStatus((status) => {
+      if (active) setAppUpdate(status);
+    });
+    void bridge.getUpdateStatus()
+      .then((status) => {
+        if (active) setAppUpdate(status);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -3135,6 +3154,30 @@ function App() {
     }
   }
 
+  async function handleAppUpdate() {
+    const bridge = window.minitelStudio;
+    if (!appUpdate || !bridge) return;
+    try {
+      const status = appUpdate.status === "ready"
+        ? await bridge.installUpdate()
+        : await bridge.checkForUpdates();
+      setAppUpdate(status);
+    } catch {
+      setAppUpdate((current) => current ? { ...current, status: "error", message: "Impossible de vérifier la mise à jour." } : current);
+    }
+  }
+
+  const updateVisible = Boolean(appUpdate && !["idle", "disabled", "up-to-date"].includes(appUpdate.status));
+  const updateCanAct = appUpdate?.status === "ready" || appUpdate?.status === "error";
+  const updateLabel = !appUpdate ? "" :
+    appUpdate.status === "checking" ? "Recherche..." :
+    appUpdate.status === "available" ? "Nouvelle version" :
+    appUpdate.status === "downloading" ? "Mise à jour " + Math.round(appUpdate.percent || 0) + " %" :
+    appUpdate.status === "ready" ? "Redémarrer" :
+    appUpdate.status === "installing" ? "Installation..." :
+    appUpdate.status === "error" ? "Réessayer" :
+    appUpdate.message;
+
   return (
     <div className={"app-shell" + (dragPreview ? " dragging-active" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
       <header className="topbar">
@@ -3144,6 +3187,25 @@ function App() {
           <p>{screenConfig.name} · {screenConfig.columns} × {screenConfig.rows}</p>
         </div>
         <div className="topbar-actions">
+          {appUpdate && updateVisible ? (
+            <button
+              type="button"
+              className={"update-indicator status-" + appUpdate.status}
+              onClick={() => void handleAppUpdate()}
+              disabled={!updateCanAct}
+              title={appUpdate.message}
+              aria-label={updateLabel}
+              aria-live="polite"
+            >
+              {appUpdate.status === "ready" ? <RotateCcw size={17} /> :
+                appUpdate.status === "available" || appUpdate.status === "downloading" ? <Download size={17} /> :
+                <RefreshCw size={17} />}
+              <span className="update-label">{updateLabel}</span>
+              {appUpdate.status === "downloading" ? (
+                <span className="update-progress" aria-hidden="true"><i style={{ width: Math.max(3, appUpdate.percent || 0) + "%" }} /></span>
+              ) : null}
+            </button>
+          ) : null}
           <div className="history-actions" aria-label="Historique">
             <button type="button" className="tool-button icon-only" onClick={undo} disabled={history.past.length === 0} title="Annuler (Ctrl+Z)"><Undo2 size={18} /></button>
             <button type="button" className="tool-button icon-only" onClick={redo} disabled={history.future.length === 0} title="Rétablir (Ctrl+Y)"><Redo2 size={18} /></button>

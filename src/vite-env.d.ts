@@ -47,6 +47,16 @@ interface UploadProgress {
   message: string;
 }
 
+type AppUpdateStage = "idle" | "disabled" | "checking" | "available" | "downloading" | "ready" | "installing" | "up-to-date" | "error";
+
+interface AppUpdateStatus {
+  status: AppUpdateStage;
+  currentVersion: string;
+  version?: string;
+  percent?: number;
+  message: string;
+}
+
 interface Window {
   minitelStudio?: {
     exportProject: (payload: { suggestedName: string; contents: string }) => Promise<ProjectFileResult>;
@@ -55,5 +65,9 @@ interface Window {
     listSerialPorts: () => Promise<ListSerialPortsResult>;
     uploadToEsp32: (payload: UploadEsp32Payload) => Promise<UploadEsp32Result>;
     onUploadProgress: (callback: (progress: UploadProgress) => void) => () => void;
+    getUpdateStatus: () => Promise<AppUpdateStatus>;
+    checkForUpdates: () => Promise<AppUpdateStatus>;
+    installUpdate: () => Promise<AppUpdateStatus>;
+    onUpdateStatus: (callback: (status: AppUpdateStatus) => void) => () => void;
   };
 }

@@ -14,4 +14,12 @@ contextBridge.exposeInMainWorld("minitelStudio", {
     ipcRenderer.on("esp32-upload-progress", listener);
     return () => ipcRenderer.removeListener("esp32-upload-progress", listener);
   },
+  getUpdateStatus: () => ipcRenderer.invoke("get-update-status"),
+  checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+  installUpdate: () => ipcRenderer.invoke("install-update"),
+  onUpdateStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("app-update-status", listener);
+    return () => ipcRenderer.removeListener("app-update-status", listener);
+  },
 });

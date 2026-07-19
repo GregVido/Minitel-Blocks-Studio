@@ -69,7 +69,7 @@ class MinitelESP32 : public Print {
                           uint8_t pingByte, const uint8_t *pongBytes,
                           size_t pongByteCount, uint16_t timeoutMs = 180,
                           uint8_t attempts = 2, bool inputPullup = true);
-  uint32_t detectBaudRate(uint16_t timeoutMs = 180, uint8_t attempts = 2,
+  uint32_t detectBaudRate(uint16_t timeoutMs = 300, uint8_t attempts = 3,
                           bool inputPullup = true);
   void end();
   uint32_t baudRate() const { return _baud; }
@@ -146,6 +146,7 @@ class MinitelESP32 : public Print {
 
   bool pingPong(uint8_t pingByte, const uint8_t *pongBytes,
                 size_t pongByteCount, uint16_t timeoutMs, uint8_t attempts);
+  bool pingTerminalStatus(uint16_t timeoutMs, uint8_t attempts);
   static uint8_t clampColumn(uint8_t column);
   static uint8_t clampRow(uint8_t row);
   static bool isMoveCoordinate(uint8_t rowByte, uint8_t columnByte);

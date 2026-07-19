@@ -513,7 +513,7 @@ const blockDefinitions: BlockDefinition[] = [
   ] },
 
   { id: "set-baud", title: "régler la vitesse", help: "Choisit le débit utilisé pour communiquer avec le Minitel.", kind: "action", category: "advanced", color: "#5d6679", inputs: [{ key: "baud", label: "débit", type: "select", defaultValue: "1200", options: baudOptions }] },
-  { id: "detect-baud", title: "détecter la vitesse", help: "Teste 1200, 300, 4800 et 9600 bauds comme dans la librairie.", kind: "action", category: "advanced", color: "#5d6679" },
+  { id: "detect-baud", title: "détecter la vitesse", help: "Envoie une demande de statut au Minitel et teste 1200, 4800, 300 puis 9600 bauds.", kind: "action", category: "advanced", color: "#5d6679" },
   { id: "reset-protocol", title: "reset protocole Minitel", help: "Envoie ESC PRO1 RESET au terminal.", kind: "action", category: "advanced", color: "#5d6679" },
 ];
 
@@ -1201,7 +1201,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       }
       case "detect-baud":
         pushLine(lines, indent, "{");
-        pushLine(lines, indent + 2, "uint32_t detectedBaud = minitel.detectBaudRate();");
+        pushLine(lines, indent + 2, "uint32_t detectedBaud = minitel.detectBaudRate(300, 3);");
         pushLine(lines, indent + 2, "if (detectedBaud == 0) {");
         pushLine(lines, indent + 4, "minitel.setBaudRate(1200);");
         pushLine(lines, indent + 2, "}");
@@ -1484,7 +1484,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       }
       case "detect-baud":
         state.baudRate = 1200;
-        state.messages.push("Vitesse détectée : 1200 bauds");
+        state.messages.push("Détection par ping : 1200 bauds (simulation)");
         break;
       case "reset-protocol":
         state.messages.push("Reset protocole envoyé");

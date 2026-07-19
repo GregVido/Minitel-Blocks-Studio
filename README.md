@@ -53,6 +53,8 @@ Chaque bloc propose des commandes pour :
 
 Dans la catégorie **Avancé**, le bloc **régler la vitesse** permet de choisir 300, 1200, 4800 ou 9600 bauds. Place-le dans la pile de démarrage à l'endroit où le changement doit avoir lieu. Le débit sélectionné apparaît aussi dans la simulation.
 
+Le bloc **détecter la vitesse** peut faire ce choix automatiquement. Il interroge le Minitel avec une demande de statut, essaie plusieurs vitesses et conserve celle qui répond. Les fils RX et TX doivent tous les deux être raccordés pour recevoir la réponse du Minitel.
+
 ## Sauvegarder et retrouver un projet
 
 Le bouton **Sauvegarder** crée un fichier de projet `.mbs`. Il conserve les blocs et leur ordre, les variables, le modèle de Minitel, les éléments placés dans l'éditeur d'écran et le modèle d'ESP32 choisi.

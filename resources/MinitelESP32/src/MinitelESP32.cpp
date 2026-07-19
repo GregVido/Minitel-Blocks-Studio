@@ -14,6 +14,10 @@ constexpr uint8_t kClearToEndOfLine = 0x18;
 constexpr uint8_t kEscape = 0x1B;
 constexpr uint8_t kHome = 0x1E;
 constexpr uint8_t kMoveTo = 0x1F;
+constexpr uint8_t kProtocolOne = 0x39;
+constexpr uint8_t kProtocolTwo = 0x3A;
+constexpr uint8_t kRequestTerminalStatus = 0x70;
+constexpr uint8_t kReplyTerminalStatus = 0x71;
 
 constexpr uint8_t kMinitelCoordinateBase = 0x40;
 constexpr uint8_t kAsciiSpace = 0x20;
@@ -80,12 +84,23 @@ uint32_t MinitelESP32::detectBaudRate(const uint32_t *baudRates,
 
 uint32_t MinitelESP32::detectBaudRate(uint16_t timeoutMs, uint8_t attempts,
                                       bool inputPullup) {
-  static const uint32_t baudRates[] = {1200, 300, 4800, 9600};
-  static const uint8_t pongBytes[] = {0x05, 0x06};
+  if (attempts == 0) {
+    return 0;
+  }
 
-  return detectBaudRate(baudRates, sizeof(baudRates) / sizeof(baudRates[0]),
-                        0x05, pongBytes, sizeof(pongBytes), timeoutMs,
-                        attempts, inputPullup);
+  static const uint32_t baudRates[] = {1200, 4800, 300, 9600};
+  const uint32_t previousBaud = _baud;
+
+  for (size_t i = 0; i < sizeof(baudRates) / sizeof(baudRates[0]); ++i) {
+    const uint32_t baud = baudRates[i];
+    setBaudRate(baud, inputPullup);
+    if (pingTerminalStatus(timeoutMs, attempts)) {
+      return baud;
+    }
+  }
+
+  setBaudRate(previousBaud, inputPullup);
+  return 0;
 }
 
 void MinitelESP32::end() { _serial.end(); }
@@ -471,6 +486,46 @@ bool MinitelESP32::pingPong(uint8_t pingByte, const uint8_t *pongBytes,
         if (static_cast<uint8_t>(received) == pongBytes[i]) {
           return true;
         }
+      }
+    }
+  }
+
+  return false;
+}
+
+bool MinitelESP32::pingTerminalStatus(uint16_t timeoutMs, uint8_t attempts) {
+  static const uint8_t request[] = {
+      kEscape, kProtocolOne, kRequestTerminalStatus};
+  static const uint8_t responsePrefix[] = {
+      kEscape, kProtocolTwo, kReplyTerminalStatus};
+
+  for (uint8_t attempt = 0; attempt < attempts; ++attempt) {
+    drainInput();
+    write(request, sizeof(request));
+    _serial.flush();
+
+    size_t matched = 0;
+    bool waitingForStatusByte = false;
+    const uint32_t startedAt = millis();
+    while (millis() - startedAt < timeoutMs) {
+      const int received = read();
+      if (received < 0) {
+        delay(1);
+        continue;
+      }
+
+      const uint8_t value = static_cast<uint8_t>(received);
+      if (waitingForStatusByte) {
+        return true;
+      }
+
+      if (value == responsePrefix[matched]) {
+        ++matched;
+        if (matched == sizeof(responsePrefix)) {
+          waitingForStatusByte = true;
+        }
+      } else {
+        matched = value == responsePrefix[0] ? 1 : 0;
       }
     }
   }

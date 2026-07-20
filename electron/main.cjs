@@ -16,6 +16,8 @@ let updaterConfigured = false;
 let updateReady = false;
 let updatePromptOpen = false;
 let startupUpdateTimer = null;
+let updateInstallRequested = false;
+const managedChildren = new Set();
 
 function broadcastUpdateState() {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -40,10 +42,52 @@ function handleUpdaterError(error) {
   });
 }
 
+
+function stopManagedChildren() {
+  for (const child of managedChildren) {
+    if (!child.pid) continue;
+    try {
+      if (process.platform === "win32") {
+        spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+      } else {
+        child.kill("SIGTERM");
+      }
+    } catch {
+      // The process may already have stopped between discovery and cleanup.
+    }
+  }
+  managedChildren.clear();
+}
+
+function prepareForUpdateInstall() {
+  if (startupUpdateTimer) {
+    clearTimeout(startupUpdateTimer);
+    startupUpdateTimer = null;
+  }
+  stopManagedChildren();
+  releaseRuntimeSubst();
+  try {
+    app.releaseSingleInstanceLock();
+  } catch {
+    // Releasing an already released lock is harmless during shutdown.
+  }
+}
+
 function installDownloadedUpdate() {
-  if (!updateReady) return { ...updateState };
+  if (!updateReady || updateInstallRequested) return { ...updateState };
+  updateInstallRequested = true;
   setUpdateState({ status: "installing", message: "Redemarrage pour installer la mise a jour..." });
-  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+  prepareForUpdateInstall();
+  setTimeout(() => {
+    try {
+      autoUpdater.quitAndInstall(true, true);
+      const forceExitTimer = setTimeout(() => app.exit(0), 1500);
+      forceExitTimer.unref();
+    } catch (error) {
+      updateInstallRequested = false;
+      handleUpdaterError(error);
+    }
+  }, 180);
   return { ...updateState };
 }
 
@@ -79,7 +123,7 @@ function configureAutoUpdater() {
   if (updaterConfigured || isDevelopment || process.platform !== "win32") return;
   updaterConfigured = true;
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
 
   autoUpdater.on("checking-for-update", () => {
@@ -182,18 +226,24 @@ function createWindow() {
 
 function runCommand(command, args, cwd, extraEnv = {}) {
   return new Promise((resolve) => {
+    if (updateInstallRequested) {
+      resolve({ ok: false, exitCode: -1, stdout: "", stderr: "Mise a jour en cours.", output: "Mise a jour en cours." });
+      return;
+    }
     const child = spawn(command, args, {
       cwd,
       shell: false,
       windowsHide: true,
       env: { ...process.env, ARDUINO_METRICS_ENABLED: "false", ...extraEnv },
     });
+    managedChildren.add(child);
     let stdout = "";
     let stderr = "";
     let settled = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
+      managedChildren.delete(child);
       resolve(result);
     };
     child.stdout.on("data", (chunk) => {
@@ -235,6 +285,16 @@ function embeddedCliPath() {
 let runtimeToolchainPromise = null;
 let runtimeSubstDrive = "";
 let runtimeSubstOwned = false;
+
+function releaseRuntimeSubst() {
+  if (runtimeSubstOwned && runtimeSubstDrive) {
+    spawnSync("subst.exe", [runtimeSubstDrive, "/D"], { windowsHide: true });
+  }
+  runtimeSubstOwned = false;
+  runtimeSubstDrive = "";
+  runtimeToolchainPromise = null;
+}
+
 
 async function runtimeToolchainRoot() {
   const source = toolchainRoot();
@@ -434,9 +494,8 @@ app.on("second-instance", () => {
 
 app.on("will-quit", () => {
   if (startupUpdateTimer) clearTimeout(startupUpdateTimer);
-  if (runtimeSubstOwned && runtimeSubstDrive) {
-    spawnSync("subst.exe", [runtimeSubstDrive, "/D"], { windowsHide: true });
-  }
+  stopManagedChildren();
+  releaseRuntimeSubst();
 });
 
 app.on("window-all-closed", () => {

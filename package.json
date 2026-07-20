@@ -80,7 +80,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Minitel Blocks Studio",
       "runAfterFinish": true,
-      "license": "LICENSE"
+      "license": "LICENSE",
+      "include": "build/installer.nsh"
     },
     "publish": [
       {

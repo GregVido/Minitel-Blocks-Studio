@@ -26,7 +26,7 @@ L'installateur contient tout le nécessaire pour préparer et envoyer un program
 
 À chaque démarrage, l'application recherche discrètement une nouvelle version lorsqu'une connexion Internet est disponible.
 
-Si une mise à jour existe, elle se télécharge en arrière-plan sans interrompre le projet en cours. Une fois prête, l'application propose de redémarrer immédiatement ou de terminer l'installation plus tard. Aucun nouvel installateur n'est à rechercher manuellement.
+Si une mise à jour existe, elle se télécharge en arrière-plan sans interrompre le projet en cours. Une fois prête, l'application propose de redémarrer immédiatement ou de terminer l'installation plus tard. En choisissant **Redémarrer maintenant**, l'application se ferme, installe la nouvelle version puis se rouvre automatiquement. Si un téléversement est en cours, choisis **Plus tard** et attends qu'il soit terminé. Aucun nouvel installateur n'est à rechercher manuellement.
 
 ## Découvrir l'interface
 

@@ -57,7 +57,7 @@ Le bloc **détecter la vitesse** peut faire ce choix automatiquement. Il interro
 
 ## Sauvegarder et retrouver un projet
 
-Le bouton **Sauvegarder** crée un fichier de projet `.mbs`. Il conserve les blocs et leur ordre, les variables, le modèle de Minitel, les éléments placés dans l'éditeur d'écran et le modèle d'ESP32 choisi.
+Le bouton **Sauvegarder** crée un fichier de projet `.mbs`. Il conserve les blocs et leur ordre, les variables, le modèle de Minitel, tous les écrans avec leurs noms et leurs éléments, ainsi que le modèle d'ESP32 choisi.
 
 Le bouton **Ouvrir** restaure ce fichier dans l'application. Le projet précédent reste accessible avec **Annuler** juste après l'ouverture d'un autre projet.
 
@@ -67,7 +67,9 @@ Un fichier `.mbs` peut être déplacé sur une clé USB, envoyé à une autre pe
 
 Passe de **Blocs** à **Écran** dans la barre située au-dessus de l'espace central.
 
-Tu peux alors :
+La liste **Mes écrans** permet de préparer plusieurs pages dans le même projet. Chaque écran peut être nommé, sélectionné, dupliqué ou supprimé. Le bouton **+** en crée un nouveau.
+
+Sur l'écran sélectionné, tu peux :
 
 - choisir le format de ton Minitel ou définir une grille personnalisée ;
 - ajouter et déplacer du texte sur la grille ;
@@ -75,7 +77,7 @@ Tu peux alors :
 - placer, redimensionner et recolorer les éléments ;
 - importer une image pour la transformer en mosaïque Minitel.
 
-Les éléments créés dans ce mode apparaissent automatiquement dans la simulation et sont inclus lors de l'envoi vers l'ESP32.
+Pour afficher une page, ajoute le bloc **dessiner l'écran** depuis la catégorie **Écran**, puis choisis son nom dans la liste. Ce bloc peut être placé au démarrage, après l'appui sur une touche ou dans une condition pour passer facilement d'un écran à un autre.
 
 ## Importer une image
 
@@ -105,7 +107,7 @@ L'onglet **Simulation** permet de vérifier le résultat avant l'envoi.
 - **Tester A** déclenche la touche sélectionnée.
 - Une touche du clavier, comme `A`, `B`, `Entrée` ou `Retour`, peut aussi être utilisée directement.
 
-La simulation suit le format d'écran choisi dans le projet.
+La simulation suit le format choisi et affiche les écrans au moment où elle rencontre un bloc **dessiner l'écran**.
 
 ## Câbler l'ESP32 au Minitel
 

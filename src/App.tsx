@@ -44,19 +44,21 @@ import type { LucideIcon } from "lucide-react";
 import {
   ScreenDesigner,
   createDefaultScreenConfig,
+  createMinitelScene,
   elementDimensions,
   fitElementsToScreen,
   makeSceneBox,
   makeSceneImage,
   makeSceneText,
   mosaicBits,
+  type MinitelScene,
   type MinitelScreenConfig,
   type SceneElement,
   type SceneImageElement,
 } from "./screen-designer";
 
 type BlockKind = "event" | "action" | "control" | "value";
-type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition";
+type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen";
 type ExprType = "number" | "boolean" | "text";
 type RightTab = "preview" | "code" | "upload";
 type WorkspaceMode = "blocks" | "designer";
@@ -155,12 +157,13 @@ type ProjectSnapshot = {
   stacks: ScriptStack[];
   variables: VariableDef[];
   screenConfig: MinitelScreenConfig;
-  sceneElements: SceneElement[];
+  screens: MinitelScene[];
+  activeScreenId: string;
 };
 
 type ProjectFile = {
   format: "minitel-blocks-studio";
-  version: 1;
+  version: 2;
   savedAt: string;
   board: string;
   project: ProjectSnapshot;
@@ -261,6 +264,7 @@ type DragPreviewStyle = CSSProperties & {
 
 type CodeContext = {
   keyVariable?: string;
+  screens?: MinitelScene[];
 };
 
 type ProjectExample = {
@@ -276,7 +280,7 @@ const DELETE_ANIMATION_MS = 260;
 const BLOCK_MOTION_MS = 430;
 const HISTORY_LIMIT = 80;
 const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
-const PROJECT_FILE_VERSION = 1;
+const PROJECT_FILE_VERSION = 2;
 
 const uid = () => "id-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
 const num = (value: number): Expr => ({ kind: "literal", valueType: "number", value });
@@ -431,6 +435,7 @@ const blockDefinitions: BlockDefinition[] = [
 
   { id: "reset-display", title: "préparer l'écran", help: "Texte normal, écran effacé, curseur en haut à gauche.", kind: "action", category: "screen", color: "#2785ff" },
   { id: "clear-screen", title: "effacer l'écran", help: "Vide les 40 colonnes et 24 lignes.", kind: "action", category: "screen", color: "#2785ff" },
+  { id: "draw-screen", title: "dessiner l'écran", help: "Affiche une composition créée dans le mode Écran.", kind: "action", category: "screen", color: "#2785ff", inputs: [{ key: "screen", label: "écran", type: "screen", defaultValue: "" }] },
   { id: "home-cursor", title: "curseur à l'accueil", help: "Replace le curseur en haut à gauche.", kind: "action", category: "screen", color: "#2785ff" },
   { id: "move-to", title: "placer le curseur", help: "Déplace le curseur dans la grille 40 x 24.", kind: "action", category: "screen", color: "#2785ff", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(1), min: 1, max: 40, compact: true },
@@ -595,6 +600,10 @@ function normalizeImportedValues(definition: BlockDefinition, value: unknown): V
       if (typeof importedValue === "string" && importedValue.trim()) values[input.key] = importedValue.trim().slice(0, 64);
       return;
     }
+    if (input.type === "screen") {
+      if (typeof importedValue === "string") values[input.key] = importedValue.slice(0, 160);
+      return;
+    }
     const optionValue = typeof importedValue === "string" ? importedValue : String(importedValue);
     if (input.options?.some((option) => option.value === optionValue)) values[input.key] = optionValue;
   });
@@ -701,6 +710,40 @@ function normalizeImportedSceneElements(value: unknown, config: MinitelScreenCon
   return fitElementsToScreen(elements, config);
 }
 
+function normalizeImportedScreens(value: unknown, config: MinitelScreenConfig): MinitelScene[] {
+  const usedIds = new Set<string>();
+  const screens = (Array.isArray(value) ? value : []).flatMap((item, index): MinitelScene[] => {
+    const source = importedRecord(item);
+    if (!source) return [];
+    const rawId = typeof source.id === "string" && /^[A-Za-z0-9_-]+$/.test(source.id) ? source.id.slice(0, 160) : uid();
+    let id = rawId;
+    let suffix = 2;
+    while (usedIds.has(id)) {
+      id = rawId + "-" + suffix;
+      suffix += 1;
+    }
+    usedIds.add(id);
+    const name = typeof source.name === "string" && source.name.trim() ? source.name.trim().slice(0, 60) : "Écran " + (index + 1);
+    return [{ id, name, elements: normalizeImportedSceneElements(source.elements, config) }];
+  });
+  return screens.length > 0 ? screens : [createMinitelScene("Écran principal")];
+}
+
+function repairScreenReferencesInBlocks(blocks: ProgramBlock[], screens: MinitelScene[]): ProgramBlock[] {
+  const validIds = new Set(screens.map((screen) => screen.id));
+  const fallbackId = screens[0]?.id ?? "";
+  return blocks.map((block) => ({
+    ...block,
+    values: block.definitionId === "draw-screen" && !validIds.has(textValue(block.values.screen, "")) ? { ...block.values, screen: fallbackId } : block.values,
+    children: block.children ? repairScreenReferencesInBlocks(block.children, screens) : block.children,
+    elseChildren: block.elseChildren ? repairScreenReferencesInBlocks(block.elseChildren, screens) : block.elseChildren,
+  }));
+}
+
+function repairScreenReferencesInStacks(stacks: ScriptStack[], screens: MinitelScene[]): ScriptStack[] {
+  return stacks.map((stack) => ({ ...stack, blocks: repairScreenReferencesInBlocks(stack.blocks, screens) }));
+}
+
 function serializeProjectFile(snapshot: ProjectSnapshot, board: string) {
   const document: ProjectFile = {
     format: PROJECT_FILE_FORMAT,
@@ -721,12 +764,32 @@ function parseProjectFile(contents: string): { project: ProjectSnapshot; board: 
   const projectSource = importedRecord(document.project) ?? document;
   if (!Array.isArray(projectSource.stacks)) throw new Error("Les blocs du projet sont absents.");
   const screenConfig = normalizeImportedScreenConfig(projectSource.screenConfig);
-  const stacks = projectSource.stacks.map(normalizeImportedStack).filter((stack): stack is ScriptStack => stack !== null);
+  const importedStacks = projectSource.stacks.map(normalizeImportedStack).filter((stack): stack is ScriptStack => stack !== null);
+  const hasScreenCollection = Array.isArray(projectSource.screens);
+  const legacyElements = hasScreenCollection ? [] : normalizeImportedSceneElements(projectSource.sceneElements, screenConfig);
+  const screens = hasScreenCollection
+    ? normalizeImportedScreens(projectSource.screens, screenConfig)
+    : [createMinitelScene("Écran principal", legacyElements)];
+  let stacks = importedStacks.length > 0 ? importedStacks : createBlankStacks();
+  if (!hasScreenCollection && legacyElements.length > 0) {
+    const drawScreen = makeBlock("draw-screen");
+    drawScreen.values.screen = screens[0].id;
+    const setupIndex = stacks.findIndex((stack) => stack.event.definitionId === "event-setup");
+    if (setupIndex >= 0) {
+      stacks = stacks.map((stack, index) => index === setupIndex ? { ...stack, blocks: [...stack.blocks, drawScreen] } : stack);
+    } else {
+      stacks = [makeStack("event-setup", [drawScreen]), ...stacks];
+    }
+  }
+  stacks = repairScreenReferencesInStacks(stacks, screens);
+  const requestedActiveScreenId = typeof projectSource.activeScreenId === "string" ? projectSource.activeScreenId : "";
+  const activeScreenId = screens.some((screen) => screen.id === requestedActiveScreenId) ? requestedActiveScreenId : screens[0].id;
   const project: ProjectSnapshot = {
-    stacks: stacks.length > 0 ? stacks : createBlankStacks(),
+    stacks,
     variables: normalizeImportedVariables(projectSource.variables),
     screenConfig,
-    sceneElements: normalizeImportedSceneElements(projectSource.sceneElements, screenConfig),
+    screens,
+    activeScreenId,
   };
   const board = typeof document.board === "string" && supportedProjectBoards.has(document.board) ? document.board : "esp32dev";
   return { project, board };
@@ -899,34 +962,39 @@ function defaultProjectVariables() {
   return createDefaultVariables();
 }
 
+function createScreenState(name = "Écran principal", elements: SceneElement[] = []) {
+  const screen = createMinitelScene(name, elements);
+  return { screens: [screen], activeScreenId: screen.id };
+}
+
 const projectExamples: ProjectExample[] = [
   {
     id: "discover",
     name: "Découverte",
     description: "Texte, couleurs, variables, répétition et touche A dans un projet prêt à explorer.",
     accent: "#2785ff",
-    create: () => ({ stacks: createExampleStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+    create: () => ({ stacks: createExampleStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), ...createScreenState() }),
   },
   {
     id: "menu",
     name: "Menu interactif",
     description: "Un vrai petit menu piloté avec les touches A et B du Minitel.",
     accent: "#e14d72",
-    create: () => ({ stacks: createMenuStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+    create: () => ({ stacks: createMenuStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), ...createScreenState() }),
   },
   {
     id: "counter",
     name: "Compteur animé",
     description: "Une variable évolue automatiquement et sa valeur apparaît à l'écran.",
     accent: "#ff9f1c",
-    create: () => ({ stacks: createCounterStacks(), variables: [{ id: uid(), name: "compteur", defaultValue: num(0) }], screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+    create: () => ({ stacks: createCounterStacks(), variables: [{ id: uid(), name: "compteur", defaultValue: num(0) }], screenConfig: createDefaultScreenConfig(), ...createScreenState() }),
   },
   {
     id: "keyboard",
     name: "Clavier sonore",
     description: "Chaque touche reçue s'affiche et déclenche un bip.",
     accent: "#18a058",
-    create: () => ({ stacks: createKeyboardStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), sceneElements: [] }),
+    create: () => ({ stacks: createKeyboardStacks(), variables: defaultProjectVariables(), screenConfig: createDefaultScreenConfig(), ...createScreenState() }),
   },
   {
     id: "poster",
@@ -937,16 +1005,20 @@ const projectExamples: ProjectExample[] = [
       const config = createDefaultScreenConfig();
       const imageWidth = 10;
       const imageHeight = 8;
+      const screen = createMinitelScene("Affiche d'accueil", [
+        makeSceneBox(2, 2, 37, 21, "Cyan", false),
+        makeSceneText("MINITEL STUDIO", 7, 4, "Yellow", "DoubleWidth"),
+        makeSceneText("Dessine ton ecran sans coder", 7, 19, "White"),
+        makeSceneImage("Sourire", 15, 8, imageWidth, imageHeight, createPixelDemoBitmap(imageWidth, imageHeight), "Green"),
+      ]);
+      const drawScreen = makeBlock("draw-screen");
+      drawScreen.values.screen = screen.id;
       return {
-        stacks: [makeStack("event-setup", [makeBlock("reset-display")])],
+        stacks: [makeStack("event-setup", [drawScreen])],
         variables: defaultProjectVariables(),
         screenConfig: config,
-        sceneElements: [
-          makeSceneBox(2, 2, 37, 21, "Cyan", false),
-          makeSceneText("MINITEL STUDIO", 7, 4, "Yellow", "DoubleWidth"),
-          makeSceneText("Dessine ton ecran sans coder", 7, 19, "White"),
-          makeSceneImage("Sourire", 15, 8, imageWidth, imageHeight, createPixelDemoBitmap(imageWidth, imageHeight), "Green"),
-        ],
+        screens: [screen],
+        activeScreenId: screen.id,
       };
     },
   },
@@ -1084,6 +1156,11 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "clear-screen":
         pushLine(lines, indent, "minitel.clear();");
         break;
+      case "draw-screen": {
+        const screen = context?.screens?.find((item) => item.id === textValue(values.screen, "")) ?? context?.screens?.[0];
+        if (screen) pushLine(lines, indent, screenFunctionName(screen) + "();");
+        break;
+      }
       case "home-cursor":
         pushLine(lines, indent, "minitel.home();");
         break;
@@ -1218,6 +1295,10 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
   });
 }
 
+function screenFunctionName(screen: MinitelScene) {
+  return "drawScreen_" + screen.id.replace(/[^A-Za-z0-9_]/g, "_");
+}
+
 function appendSceneCode(lines: string[], elements: SceneElement[], indent: number) {
   if (elements.length === 0) return;
   pushLine(lines, indent, "// Composition créée dans le mode Écran");
@@ -1266,7 +1347,7 @@ function appendSceneCode(lines: string[], elements: SceneElement[], indent: numb
   });
 }
 
-function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], screenConfig: MinitelScreenConfig, sceneElements: SceneElement[]) {
+function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], screenConfig: MinitelScreenConfig, screens: MinitelScene[]) {
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
@@ -1281,9 +1362,14 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
     });
   }
 
+  screens.forEach((screen) => {
+    lines.push("", "// Écran : " + screen.name.replace(/[\r\n]+/g, " "), "void " + screenFunctionName(screen) + "() {", "  minitel.resetDisplay();");
+    appendSceneCode(lines, screen.elements, 2);
+    lines.push("}");
+  });
+
   lines.push("", "void setup() {", "  minitel.begin();", "  minitel.resetDisplay();");
-  setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables));
-  appendSceneCode(lines, sceneElements, 2);
+  setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens }));
   lines.push("}", "", "void loop() {");
 
   if (keyStacks.length > 0) {
@@ -1294,12 +1380,12 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       } else {
         lines.push("  if (" + keyCondition(stack.event.values.key) + ") {");
       }
-      appendBlockCode(lines, stack.blocks, 4, variables, { keyVariable: "key" });
+      appendBlockCode(lines, stack.blocks, 4, variables, { keyVariable: "key", screens });
       lines.push("  }");
     });
   }
 
-  loopStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables));
+  loopStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens }));
   lines.push("  delay(10);", "}");
   return lines.join("\n");
 }
@@ -1355,7 +1441,7 @@ function writePreviewText(state: PreviewState, text: string) {
   }
 }
 
-function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, depth = 0) {
+function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], depth = 0) {
   blocks.forEach((block) => {
     const values = block.values;
     switch (block.definitionId) {
@@ -1370,6 +1456,18 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         clearPreview(state);
         state.messages.push("Écran effacé");
         break;
+      case "draw-screen": {
+        const screen = screens.find((item) => item.id === textValue(values.screen, "")) ?? screens[0];
+        if (screen) {
+          state.textSize = "Normal";
+          state.fg = previewColors.White;
+          state.bg = previewColors.Black;
+          clearPreview(state);
+          applyScenePreview(state, screen.elements);
+          state.messages.push("Écran : " + screen.name);
+        }
+        break;
+      }
       case "home-cursor":
         setCursor(state, 1, 1);
         break;
@@ -1430,21 +1528,21 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "control-repeat": {
         const count = clamp(exprPreviewNumber(values.times, state.variables, 10), 0, 20);
         for (let index = 0; index < count; index += 1) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
         }
         break;
       }
       case "control-forever":
         state.messages.push("Toujours: aperçu 1 tour");
-        applyBlocksPreview(state, block.children ?? [], previewKey, depth + 1);
+        applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
         break;
       case "control-if":
         if (exprPreviewBoolean(values.condition, state.variables)) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
         }
         break;
       case "control-if-else":
-        applyBlocksPreview(state, exprPreviewBoolean(values.condition, state.variables) ? block.children ?? [] : block.elseChildren ?? [], previewKey, depth + 1);
+        applyBlocksPreview(state, exprPreviewBoolean(values.condition, state.variables) ? block.children ?? [] : block.elseChildren ?? [], previewKey, screens, depth + 1);
         break;
       case "control-for": {
         const name = textValue(values.variable, "compteur");
@@ -1454,7 +1552,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         let guard = 0;
         for (let current = from; current <= to && guard < 20; current += step) {
           state.variables[name] = current;
-          applyBlocksPreview(state, block.children ?? [], previewKey, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
           guard += 1;
         }
         break;
@@ -1530,24 +1628,23 @@ function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], screenConfig: MinitelScreenConfig, sceneElements: SceneElement[]) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], screenConfig: MinitelScreenConfig, screens: MinitelScene[]) {
   const state = createPreviewState(variables, screenConfig);
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
-  setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
-  applyScenePreview(state, sceneElements);
+  setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens));
   for (let turn = 0; turn < loopCount; turn += 1) {
-    loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey));
+    loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens));
   }
 
   simulatedKeys.slice(-12).forEach((key) => {
     state.messages.push("Touche " + (key === "Enter" ? "Entrée" : key === "Backspace" ? "Retour" : key));
     keyStacks
       .filter((stack) => stack.event.definitionId === "event-key-any" || previewKeyMatches(stack.event.values.key, key))
-      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key));
+      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens));
   });
 
   state.messages.push("Tour " + loopCount);
@@ -1791,7 +1888,7 @@ function BooleanExpressionEditor({ value, variables, onChange }: { value: InputV
   );
 }
 
-function InputControl({ input, value, variables, onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; onChange: (value: InputValue) => void }) {
+function InputControl({ input, value, variables, screens = [], onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; onChange: (value: InputValue) => void }) {
   const actualValue = value ?? input.defaultValue;
   const stopDrag = (event: MouseEvent) => event.stopPropagation();
   const options = input.options ?? [];
@@ -1839,6 +1936,22 @@ function InputControl({ input, value, variables, onChange }: { input: BlockInput
         <select value={String(actualValue)} onChange={(event) => onChange(event.target.value)}>
           {variables.map((variable) => (
             <option value={variable.name} key={variable.id}>{variable.name}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+
+  if (input.type === "screen") {
+    const requestedId = String(actualValue);
+    const selectedScreenId = screens.some((screen) => screen.id === requestedId) ? requestedId : screens[0]?.id ?? "";
+    return (
+      <label className="block-control screen-control" onMouseDown={stopDrag}>
+        <span>{input.label}</span>
+        <select value={selectedScreenId} onChange={(event) => onChange(event.target.value)}>
+          {screens.map((screen) => (
+            <option value={screen.id} key={screen.id}>{screen.name.trim() || "Écran sans nom"}</option>
           ))}
         </select>
       </label>
@@ -1910,7 +2023,7 @@ function PaletteBlock({
     >
       <span>{definition.title}</span>
       {definition.inputs?.slice(0, 2).map((input) => (
-        <span className="palette-input-preview" key={input.key}>{expressionLabel(input.defaultValue)}</span>
+        <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : expressionLabel(input.defaultValue)}</span>
       ))}
     </button>
   );
@@ -1963,6 +2076,7 @@ function BlockListView({
   ownerId,
   slot,
   variables,
+  screens,
   removingIds,
   motionIds,
   draggingBlockId,
@@ -1983,6 +2097,7 @@ function BlockListView({
   ownerId?: string;
   slot: DropLocation["slot"];
   variables: VariableDef[];
+  screens: MinitelScene[];
   removingIds: Set<string>;
   motionIds: Record<string, MotionKind>;
   draggingBlockId: string;
@@ -2012,6 +2127,7 @@ function BlockListView({
             isFirst={index === 0}
             isLast={index === blocks.length - 1}
             variables={variables}
+            screens={screens}
             removingIds={removingIds}
             motionIds={motionIds}
             draggingBlockId={draggingBlockId}
@@ -2043,6 +2159,7 @@ function ProgramBlockView({
   isFirst,
   isLast,
   variables,
+  screens,
   removingIds,
   motionIds,
   draggingBlockId,
@@ -2066,6 +2183,7 @@ function ProgramBlockView({
   isFirst: boolean;
   isLast: boolean;
   variables: VariableDef[];
+  screens: MinitelScene[];
   removingIds: Set<string>;
   motionIds: Record<string, MotionKind>;
   draggingBlockId: string;
@@ -2155,7 +2273,7 @@ function ProgramBlockView({
           {definition.inputs && definition.inputs.length > 0 ? (
             <div className="block-inputs">
               {definition.inputs.map((input) => (
-                <InputControl key={input.key} input={input} variables={variables} value={block.values[input.key]} onChange={(value) => onValueChange(stackId, block.id, input.key, value)} />
+                <InputControl key={input.key} input={input} variables={variables} screens={screens} value={block.values[input.key]} onChange={(value) => onValueChange(stackId, block.id, input.key, value)} />
               ))}
             </div>
           ) : null}
@@ -2185,6 +2303,7 @@ function ProgramBlockView({
             ownerId={block.id}
             slot={slotDefinition.key}
             variables={variables}
+            screens={screens}
             removingIds={removingIds}
             motionIds={motionIds}
             draggingBlockId={draggingBlockId}
@@ -2267,7 +2386,8 @@ function App() {
   const [variables, setVariables] = useState<VariableDef[]>(() => initialProject.variables);
   const [stacks, setStacks] = useState<ScriptStack[]>(() => initialProject.stacks);
   const [screenConfig, setScreenConfig] = useState<MinitelScreenConfig>(() => initialProject.screenConfig);
-  const [sceneElements, setSceneElements] = useState<SceneElement[]>(() => initialProject.sceneElements);
+  const [screens, setScreens] = useState<MinitelScene[]>(() => initialProject.screens);
+  const [activeScreenId, setActiveScreenId] = useState(() => initialProject.activeScreenId);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("blocks");
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [selectedStackId, setSelectedStackId] = useState<string>("");
@@ -2306,8 +2426,10 @@ function App() {
 
   const activeStackId = selectedStackId || stacks[0]?.id || "";
   const activeBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
-  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, sceneElements), [sceneElements, screenConfig, stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, sceneElements), [sceneElements, screenConfig, stacks, variables, previewKey, simTick, simulatedKeys]);
+  const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
+  const sceneElements = activeScreen?.elements ?? [];
+  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens), [screenConfig, screens, stacks, variables]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, screens), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys]);
 
   function moveDragPreview(event: { clientX: number; clientY: number }) {
     if (!event.clientX && !event.clientY) return;
@@ -2515,7 +2637,7 @@ function App() {
   }
 
   function pushHistory() {
-    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, sceneElements });
+    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId });
     setHistory((current) => {
       const last = current.past[current.past.length - 1];
       if (last && JSON.stringify(last) === JSON.stringify(snapshot)) {
@@ -2566,7 +2688,8 @@ function App() {
     setStacks(next.stacks);
     setVariables(next.variables);
     setScreenConfig(next.screenConfig);
-    setSceneElements(next.sceneElements);
+    setScreens(next.screens);
+    setActiveScreenId(next.activeScreenId);
     setSelectedStackId((current) => (next.stacks.some((stack) => stack.id === current) ? current : next.stacks[0]?.id || ""));
     setSimRunning(false);
     setSimTick(0);
@@ -2577,7 +2700,7 @@ function App() {
   function undo() {
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, sceneElements });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId });
     setHistory({ past: history.past.slice(0, -1), future: [now, ...history.future].slice(0, HISTORY_LIMIT) });
     restoreSnapshot(previous);
     flashNotice("Retour en arrière");
@@ -2586,7 +2709,7 @@ function App() {
   function redo() {
     if (history.future.length === 0) return;
     const next = history.future[0];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, sceneElements });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId });
     setHistory({ past: [...history.past.slice(-HISTORY_LIMIT + 1), now], future: history.future.slice(1) });
     restoreSnapshot(next);
     flashNotice("Action rétablie");
@@ -2681,7 +2804,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [board, examplesOpen, history, rightTab, sceneElements, screenConfig, stacks, variables]);
+  }, [activeScreenId, board, examplesOpen, history, rightTab, screenConfig, screens, stacks, variables]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -2748,8 +2871,15 @@ function App() {
     setSelectedStackId(location.stackId);
   }
 
-  function addBlockToStack(stackId: string, definitionId: string) {
+
+  function makeProjectBlock(definitionId: string) {
     const block = makeBlock(definitionId);
+    if (definitionId === "draw-screen") block.values.screen = activeScreen?.id ?? screens[0]?.id ?? "";
+    return block;
+  }
+
+  function addBlockToStack(stackId: string, definitionId: string) {
+    const block = makeProjectBlock(definitionId);
     insertBranch({ stackId, slot: "root", index: stacks.find((stack) => stack.id === stackId)?.blocks.length ?? 0 }, [block]);
     window.setTimeout(() => animateBlock(collectBlockIds([block]), "moving-drop"), 0);
     flashNotice("Bloc ajouté");
@@ -2766,7 +2896,7 @@ function App() {
       return;
     }
     if (!activeStackId) {
-      const stack = makeStack("event-setup", [makeBlock(definition.id)]);
+      const stack = makeStack("event-setup", [makeProjectBlock(definition.id)]);
       pushHistory();
       setStacks([stack]);
       setSelectedStackId(stack.id);
@@ -2788,7 +2918,7 @@ function App() {
         flashNotice("Cette valeur se glisse dans les champs");
         return;
       }
-      const block = makeBlock(payload.definitionId);
+      const block = makeProjectBlock(payload.definitionId);
       insertBranch(location, [block]);
       window.setTimeout(() => animateBlock(collectBlockIds([block]), "moving-drop"), 0);
       flashNotice("Bloc accroché");
@@ -2943,12 +3073,14 @@ function App() {
 
   function resetProgram() {
     const nextStacks = createBlankStacks();
+    const nextScreen = createMinitelScene("Écran principal");
     clearPendingDeletes();
     pushHistory();
     setStacks(nextStacks);
     setVariables(createDefaultVariables());
     setScreenConfig(createDefaultScreenConfig());
-    setSceneElements([]);
+    setScreens([nextScreen]);
+    setActiveScreenId(nextScreen.id);
     setWorkspaceMode("blocks");
     setSelectedStackId(nextStacks[0].id);
     setSimRunning(false);
@@ -2966,8 +3098,9 @@ function App() {
     setStacks(next.stacks);
     setVariables(next.variables);
     setScreenConfig(next.screenConfig);
-    setSceneElements(next.sceneElements);
-    setWorkspaceMode(next.sceneElements.length > 0 ? "designer" : "blocks");
+    setScreens(next.screens);
+    setActiveScreenId(next.activeScreenId);
+    setWorkspaceMode(next.screens.some((screen) => screen.elements.length > 0) ? "designer" : "blocks");
     setSelectedStackId(next.stacks[0]?.id ?? "");
     setSimRunning(false);
     setSimTick(0);
@@ -2980,14 +3113,21 @@ function App() {
   function changeScreenConfig(next: MinitelScreenConfig) {
     pushHistory();
     setScreenConfig(next);
-    setSceneElements((current) => fitElementsToScreen(current, next));
+    setScreens((current) => current.map((screen) => ({ ...screen, elements: fitElementsToScreen(screen.elements, next) })));
     setSimTick(0);
   }
 
-  function changeSceneElements(next: SceneElement[]) {
+  function changeScreens(next: MinitelScene[]) {
+    if (next.length === 0) return;
     pushHistory();
-    setSceneElements(next);
+    setScreens(next);
+    setActiveScreenId((current) => next.some((screen) => screen.id === current) ? current : next[0].id);
+    setStacks((current) => repairScreenReferencesInStacks(current, next));
     setSimTick(0);
+  }
+
+  function changeActiveScreen(screenId: string) {
+    setActiveScreenId(screenId);
   }
 
   function addVariable() {
@@ -3053,7 +3193,7 @@ function App() {
   }
 
   async function saveProject() {
-    const contents = serializeProjectFile({ stacks, variables, screenConfig, sceneElements }, board);
+    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId }, board);
     try {
       if (window.minitelStudio?.exportProject) {
         const result = await window.minitelStudio.exportProject({ suggestedName: "Mon-projet-Minitel.mbs", contents });
@@ -3090,7 +3230,7 @@ function App() {
       pushHistory();
       restoreSnapshot(imported.project);
       setBoard(imported.board);
-      setWorkspaceMode(imported.project.sceneElements.length > 0 ? "designer" : "blocks");
+      setWorkspaceMode(imported.project.screens.some((screen) => screen.elements.length > 0) ? "designer" : "blocks");
       setRightTab("preview");
       flashNotice("Projet restauré");
     } catch (error) {
@@ -3247,7 +3387,7 @@ function App() {
           <div className="workspace-header">
             <div className="workspace-heading">
               <div className="section-title"><Radio size={18} /><span>{workspaceMode === "blocks" ? "Programme" : "Éditeur d'écran"}</span></div>
-              <p>{workspaceMode === "blocks" ? stacks.length + " pile" + (stacks.length > 1 ? "s" : "") + " active" + (stacks.length > 1 ? "s" : "") : sceneElements.length + " élément" + (sceneElements.length > 1 ? "s" : "") + " placé" + (sceneElements.length > 1 ? "s" : "")}</p>
+              <p>{workspaceMode === "blocks" ? stacks.length + " pile" + (stacks.length > 1 ? "s" : "") + " active" + (stacks.length > 1 ? "s" : "") : screens.length + " écran" + (screens.length > 1 ? "s" : "") + " · " + sceneElements.length + " élément" + (sceneElements.length > 1 ? "s" : "")}</p>
             </div>
             <div className="workspace-mode-tabs" aria-label="Mode d'édition">
               <button type="button" className={workspaceMode === "blocks" ? "active" : ""} onClick={() => setWorkspaceMode("blocks")}><ListTree size={16} /><span>Blocs</span></button>
@@ -3262,12 +3402,12 @@ function App() {
               {stacks.map((stack) => (
                 <section className={"script-stack " + (activeStackId === stack.id ? "selected " : "") + (removingStacks.has(stack.id) ? "deleting " : "") + (draggingStackId === stack.id ? "dragging" : "")} key={stack.id} onClick={() => setSelectedStackId(stack.id)}>
                   <EventHeader stack={stack} variables={variables} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} onStackPointerDown={prepareStackPointerDrag} />
-                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
+                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} screens={screens} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
                 </section>
               ))}
             </div>
           ) : (
-            <ScreenDesigner config={screenConfig} elements={sceneElements} onConfigChange={changeScreenConfig} onElementsChange={changeSceneElements} onNotice={flashNotice} />
+            <ScreenDesigner config={screenConfig} screens={screens} activeScreenId={activeScreen?.id ?? ""} onConfigChange={changeScreenConfig} onScreensChange={changeScreens} onActiveScreenChange={changeActiveScreen} onNotice={flashNotice} />
           )}
         </section>
 

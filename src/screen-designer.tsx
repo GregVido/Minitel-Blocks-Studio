@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import Copy from "lucide-react/dist/esm/icons/copy.js";
 import ImagePlus from "lucide-react/dist/esm/icons/image-plus.js";
+import Layers3 from "lucide-react/dist/esm/icons/layers-3.js";
 import Maximize2 from "lucide-react/dist/esm/icons/maximize-2.js";
 import Move from "lucide-react/dist/esm/icons/move.js";
 import Palette from "lucide-react/dist/esm/icons/palette.js";
+import Plus from "lucide-react/dist/esm/icons/plus.js";
 import Settings2 from "lucide-react/dist/esm/icons/settings-2.js";
 import SlidersHorizontal from "lucide-react/dist/esm/icons/sliders-horizontal.js";
 import Square from "lucide-react/dist/esm/icons/square.js";
@@ -53,6 +56,12 @@ export type SceneImageElement = SceneElementBase & {
 };
 
 export type SceneElement = SceneTextElement | SceneBoxElement | SceneImageElement;
+
+export type MinitelScene = {
+  id: string;
+  name: string;
+  elements: SceneElement[];
+};
 
 export type ImageAlgorithm = "threshold" | "ordered" | "floyd";
 type ImageFit = "contain" | "cover" | "stretch";
@@ -124,6 +133,10 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 
 export function createDefaultScreenConfig(): MinitelScreenConfig {
   return { preset: "minitel-40", name: "Minitel 40 colonnes", columns: 40, rows: 24 };
+}
+
+export function createMinitelScene(name = "Écran principal", elements: SceneElement[] = []): MinitelScene {
+  return { id: "screen-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16), name, elements };
 }
 
 export function makeSceneText(text: string, x: number, y: number, fg: SceneColor = "White", size: SceneTextSize = "Normal", bg: SceneColor = "Black"): SceneTextElement {
@@ -363,7 +376,9 @@ function ElementInspector({ element, config, onChange, onDelete }: { element: Sc
   );
 }
 
-export function ScreenDesigner({ config, elements, onConfigChange, onElementsChange, onNotice }: { config: MinitelScreenConfig; elements: SceneElement[]; onConfigChange: (next: MinitelScreenConfig) => void; onElementsChange: (next: SceneElement[]) => void; onNotice: (message: string) => void }) {
+export function ScreenDesigner({ config, screens, activeScreenId, onConfigChange, onScreensChange, onActiveScreenChange, onNotice }: { config: MinitelScreenConfig; screens: MinitelScene[]; activeScreenId: string; onConfigChange: (next: MinitelScreenConfig) => void; onScreensChange: (next: MinitelScene[]) => void; onActiveScreenChange: (screenId: string) => void; onNotice: (message: string) => void }) {
+  const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
+  const elements = activeScreen?.elements ?? [];
   const [selectedId, setSelectedId] = useState(elements[0]?.id ?? "");
   const [dragPreview, setDragPreview] = useState<SceneElement | null>(null);
   const [imageSource, setImageSource] = useState<{ dataUrl: string; name: string } | null>(null);
@@ -373,23 +388,34 @@ export function ScreenDesigner({ config, elements, onConfigChange, onElementsCha
   const selected = elements.find((element) => element.id === selectedId) ?? null;
 
   useEffect(() => {
+    setSelectedId(elements[0]?.id ?? "");
+    setDragPreview(null);
+    dragRef.current = null;
+  }, [activeScreen?.id]);
+
+  useEffect(() => {
     if (selectedId && !elements.some((element) => element.id === selectedId)) setSelectedId(elements[0]?.id ?? "");
   }, [elements, selectedId]);
 
+  function updateActiveElements(next: SceneElement[]) {
+    if (!activeScreen) return;
+    onScreensChange(screens.map((screen) => screen.id === activeScreen.id ? { ...screen, elements: next } : screen));
+  }
+
   function addElement(element: SceneElement) {
     const fitted = fitElementsToScreen([element], config)[0];
-    onElementsChange([...elements, fitted]);
+    updateActiveElements([...elements, fitted]);
     setSelectedId(fitted.id);
   }
 
   function updateElement(next: SceneElement) {
     const fitted = fitElementsToScreen([next], config)[0];
-    onElementsChange(elements.map((element) => element.id === fitted.id ? fitted : element));
+    updateActiveElements(elements.map((element) => element.id === fitted.id ? fitted : element));
   }
 
   function deleteSelected() {
     if (!selected) return;
-    onElementsChange(elements.filter((element) => element.id !== selected.id));
+    updateActiveElements(elements.filter((element) => element.id !== selected.id));
     setSelectedId("");
     onNotice("Élément supprimé");
   }
@@ -439,7 +465,7 @@ export function ScreenDesigner({ config, elements, onConfigChange, onElementsCha
     dragRef.current = null;
     setDragPreview(null);
     const original = elements.find((element) => element.id === drag.id);
-    if (original && JSON.stringify(original) !== JSON.stringify(drag.next)) onElementsChange(elements.map((element) => element.id === drag.id ? drag.next : element));
+    if (original && JSON.stringify(original) !== JSON.stringify(drag.next)) updateActiveElements(elements.map((element) => element.id === drag.id ? drag.next : element));
     event.stopPropagation();
   }
 
@@ -458,61 +484,120 @@ export function ScreenDesigner({ config, elements, onConfigChange, onElementsCha
     onConfigChange({ preset: preset.id, name: preset.name, columns: preset.columns, rows: preset.rows });
   }
 
+  function uniqueScreenName(base: string) {
+    const used = new Set(screens.map((screen) => screen.name.trim().toLocaleLowerCase("fr")));
+    if (!used.has(base.toLocaleLowerCase("fr"))) return base;
+    let suffix = 2;
+    while (used.has((base + " " + suffix).toLocaleLowerCase("fr"))) suffix += 1;
+    return base + " " + suffix;
+  }
+
+  function addScreen() {
+    const screen = createMinitelScene(uniqueScreenName("Écran " + (screens.length + 1)));
+    onScreensChange([...screens, screen]);
+    onActiveScreenChange(screen.id);
+    setSelectedId("");
+    onNotice("Nouvel écran ajouté");
+  }
+
+  function duplicateScreen() {
+    if (!activeScreen) return;
+    const baseName = (activeScreen.name.trim() || "Écran") + " copie";
+    const screen = createMinitelScene(uniqueScreenName(baseName), activeScreen.elements.map((element) => ({ ...element, id: localUid() } as SceneElement)));
+    onScreensChange([...screens, screen]);
+    onActiveScreenChange(screen.id);
+    setSelectedId(screen.elements[0]?.id ?? "");
+    onNotice("Écran dupliqué");
+  }
+
+  function deleteScreen() {
+    if (!activeScreen || screens.length <= 1) return;
+    const index = screens.findIndex((screen) => screen.id === activeScreen.id);
+    const nextScreens = screens.filter((screen) => screen.id !== activeScreen.id);
+    const nextActive = nextScreens[Math.min(index, nextScreens.length - 1)];
+    onScreensChange(nextScreens);
+    onActiveScreenChange(nextActive.id);
+    setSelectedId(nextActive.elements[0]?.id ?? "");
+    onNotice("Écran supprimé");
+  }
+
   const displayedElements = elements.map((element) => dragPreview?.id === element.id ? dragPreview : element);
   const screenStyle = { "--screen-columns": config.columns, "--screen-rows": config.rows, aspectRatio: (config.columns * 4) + " / " + (config.rows * 5) } as DesignerStyle;
 
   return (
     <div className="screen-designer">
-      <div className="designer-main">
-        <div className="designer-toolbar">
-          <div className="designer-tools">
-            <button type="button" onClick={() => addElement(makeSceneText("Nouveau texte", 2, 2, "White"))}><Type size={16} /><span>Texte</span></button>
-            <button type="button" onClick={() => addElement(makeSceneBox(2, 4, Math.min(18, config.columns - 1), Math.min(8, config.rows - 3), "Cyan"))}><Square size={16} /><span>Cadre</span></button>
-            <button type="button" onClick={() => fileInputRef.current?.click()}><ImagePlus size={16} /><span>Image</span></button>
-            <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" onChange={(event) => { handleFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+      <div className="screen-library">
+        <div className="screen-library-head">
+          <div className="screen-library-title"><Layers3 size={17} /><span>Mes écrans</span><small>{screens.length}</small></div>
+          <label className="screen-name-field"><span>Nom</span><input type="text" maxLength={60} value={activeScreen?.name ?? ""} onChange={(event) => activeScreen && onScreensChange(screens.map((screen) => screen.id === activeScreen.id ? { ...screen, name: event.target.value } : screen))} onBlur={() => activeScreen && !activeScreen.name.trim() && onScreensChange(screens.map((screen) => screen.id === activeScreen.id ? { ...screen, name: "Écran sans nom" } : screen))} /></label>
+          <div className="screen-library-actions">
+            <button type="button" onClick={duplicateScreen} title="Dupliquer l'écran" aria-label="Dupliquer l'écran"><Copy size={16} /></button>
+            <button type="button" onClick={deleteScreen} disabled={screens.length <= 1} title="Supprimer l'écran" aria-label="Supprimer l'écran"><Trash2 size={16} /></button>
+            <button type="button" className="primary" onClick={addScreen} title="Ajouter un écran" aria-label="Ajouter un écran"><Plus size={17} /></button>
           </div>
-          <div className="designer-size-badge"><Maximize2 size={15} /><span>{config.columns} × {config.rows}</span></div>
         </div>
-        <div className="designer-stage">
-          <div className="designer-screen" ref={screenRef} style={screenStyle} onPointerMove={moveElement} onPointerUp={finishElementDrag} onPointerCancel={finishElementDrag} onPointerDown={(event) => { if (event.target === event.currentTarget) setSelectedId(""); }}>
-            <div className="designer-safe-area" />
-            {displayedElements.map((element) => {
-              const dimensions = elementDimensions(element);
-              const elementStyle = {
-                "--element-x": element.x - 1,
-                "--element-y": element.y - 1,
-                "--element-width": dimensions.width,
-                "--element-height": dimensions.height,
-                "--element-fg": colorValues[element.fg],
-                "--element-bg": element.kind === "text" ? colorValues[element.bg] : "transparent",
-              } as DesignerStyle;
-              return (
-                <div className={"scene-element " + element.kind + (selectedId === element.id ? " selected" : "") + (dragPreview?.id === element.id ? " dragging" : "")} style={elementStyle} key={element.id} onPointerDown={(event) => beginElementDrag(event, element, "move")} title="Déplacer l'élément">
-                  {element.kind === "text" ? <span className={"scene-text " + element.size}>{element.text || "Texte"}</span> : null}
-                  {element.kind === "box" ? <span className={"scene-box " + (element.filled ? "filled" : "")} /> : null}
-                  {element.kind === "image" ? <PixelPreview bitmap={element.bitmap} width={element.width * 2} height={element.height * 3} color={element.fg} /> : null}
-                  {element.kind !== "text" && selectedId === element.id ? <button type="button" className="scene-resize-handle" onPointerDown={(event) => beginElementDrag(event, element, "resize")} title="Redimensionner"><Maximize2 size={12} /></button> : null}
-                </div>
-              );
-            })}
-          </div>
+        <div className="screen-tabs-list" role="tablist" aria-label="Écrans du projet">
+          {screens.map((screen, index) => (
+            <button type="button" role="tab" aria-selected={screen.id === activeScreen?.id} className={"screen-tab" + (screen.id === activeScreen?.id ? " active" : "")} onClick={() => { onActiveScreenChange(screen.id); setSelectedId(screen.elements[0]?.id ?? ""); }} key={screen.id}>
+              <span className="screen-tab-index">{index + 1}</span>
+              <span className="screen-tab-copy"><strong>{screen.name.trim() || "Écran sans nom"}</strong><small>{screen.elements.length} élément{screen.elements.length > 1 ? "s" : ""}</small></span>
+            </button>
+          ))}
         </div>
       </div>
-      <aside className="designer-inspector">
-        <div className="designer-settings">
-          <div className="inspector-title"><Settings2 size={16} /><span>Format du Minitel</span></div>
-          <label className="property-field property-wide"><span>Modèle</span><select value={config.preset} onChange={(event) => changePreset(event.target.value as ScreenPresetId)}>{screenPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
-          <label className="property-field property-wide"><span>Nom du projet</span><input value={config.name} onChange={(event) => onConfigChange({ ...config, name: event.target.value, preset: config.preset === "custom" ? "custom" : config.preset })} /></label>
-          <div className="property-grid">
-            <label className="property-field"><span>Colonnes</span><input type="number" min="20" max="40" value={config.columns} onChange={(event) => onConfigChange({ ...config, preset: "custom", columns: clamp(Number(event.target.value), 20, 40) })} /></label>
-            <label className="property-field"><span>Lignes</span><input type="number" min="12" max="24" value={config.rows} onChange={(event) => onConfigChange({ ...config, preset: "custom", rows: clamp(Number(event.target.value), 12, 24) })} /></label>
+
+      <div className="designer-content">
+        <div className="designer-main">
+          <div className="designer-toolbar">
+            <div className="designer-tools">
+              <button type="button" onClick={() => addElement(makeSceneText("Nouveau texte", 2, 2, "White"))}><Type size={16} /><span>Texte</span></button>
+              <button type="button" onClick={() => addElement(makeSceneBox(2, 4, Math.min(18, config.columns - 1), Math.min(8, config.rows - 3), "Cyan"))}><Square size={16} /><span>Cadre</span></button>
+              <button type="button" onClick={() => fileInputRef.current?.click()}><ImagePlus size={16} /><span>Image</span></button>
+              <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" onChange={(event) => { handleFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+            </div>
+            <div className="designer-size-badge"><Maximize2 size={15} /><span>{config.columns} × {config.rows}</span></div>
+          </div>
+          <div className="designer-stage">
+            <div className="designer-screen" ref={screenRef} style={screenStyle} onPointerMove={moveElement} onPointerUp={finishElementDrag} onPointerCancel={finishElementDrag} onPointerDown={(event) => { if (event.target === event.currentTarget) setSelectedId(""); }}>
+              <div className="designer-safe-area" />
+              {displayedElements.map((element) => {
+                const dimensions = elementDimensions(element);
+                const elementStyle = {
+                  "--element-x": element.x - 1,
+                  "--element-y": element.y - 1,
+                  "--element-width": dimensions.width,
+                  "--element-height": dimensions.height,
+                  "--element-fg": colorValues[element.fg],
+                  "--element-bg": element.kind === "text" ? colorValues[element.bg] : "transparent",
+                } as DesignerStyle;
+                return (
+                  <div className={"scene-element " + element.kind + (selectedId === element.id ? " selected" : "") + (dragPreview?.id === element.id ? " dragging" : "")} style={elementStyle} key={element.id} onPointerDown={(event) => beginElementDrag(event, element, "move")} title="Déplacer l'élément">
+                    {element.kind === "text" ? <span className={"scene-text " + element.size}>{element.text || "Texte"}</span> : null}
+                    {element.kind === "box" ? <span className={"scene-box " + (element.filled ? "filled" : "")} /> : null}
+                    {element.kind === "image" ? <PixelPreview bitmap={element.bitmap} width={element.width * 2} height={element.height * 3} color={element.fg} /> : null}
+                    {element.kind !== "text" && selectedId === element.id ? <button type="button" className="scene-resize-handle" onPointerDown={(event) => beginElementDrag(event, element, "resize")} title="Redimensionner"><Maximize2 size={12} /></button> : null}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
-        <div className="designer-properties">
-          <div className="inspector-title"><Palette size={16} /><span>Élément sélectionné</span></div>
-          <ElementInspector element={selected} config={config} onChange={updateElement} onDelete={deleteSelected} />
-        </div>
-      </aside>
+        <aside className="designer-inspector">
+          <div className="designer-settings">
+            <div className="inspector-title"><Settings2 size={16} /><span>Format du Minitel</span></div>
+            <label className="property-field property-wide"><span>Modèle</span><select value={config.preset} onChange={(event) => changePreset(event.target.value as ScreenPresetId)}>{screenPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
+            <label className="property-field property-wide"><span>Nom du modèle</span><input value={config.name} onChange={(event) => onConfigChange({ ...config, name: event.target.value, preset: config.preset === "custom" ? "custom" : config.preset })} /></label>
+            <div className="property-grid">
+              <label className="property-field"><span>Colonnes</span><input type="number" min="20" max="40" value={config.columns} onChange={(event) => onConfigChange({ ...config, preset: "custom", columns: clamp(Number(event.target.value), 20, 40) })} /></label>
+              <label className="property-field"><span>Lignes</span><input type="number" min="12" max="24" value={config.rows} onChange={(event) => onConfigChange({ ...config, preset: "custom", rows: clamp(Number(event.target.value), 12, 24) })} /></label>
+            </div>
+          </div>
+          <div className="designer-properties">
+            <div className="inspector-title"><Palette size={16} /><span>Élément sélectionné</span></div>
+            <ElementInspector element={selected} config={config} onChange={updateElement} onDelete={deleteSelected} />
+          </div>
+        </aside>
+      </div>
       {imageSource ? <ImageImportModal sourceDataUrl={imageSource.dataUrl} sourceName={imageSource.name} config={config} onClose={() => setImageSource(null)} onImport={(element) => { addElement(element); setImageSource(null); onNotice("Image ajoutée à l'écran"); }} /> : null}
     </div>
   );

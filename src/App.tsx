@@ -130,6 +130,7 @@ type BlockDefinition = {
   color: string;
   inputs?: BlockInput[];
   slots?: SlotDefinition[];
+  output?: Expr;
 };
 
 type EventInstance = {
@@ -206,6 +207,18 @@ type DropLocation = {
   index: number;
 };
 
+type ExpressionPathPart = "left" | "right";
+
+type ExpressionDropOwner =
+  | { owner: "block"; stackId: string; blockId: string; inputKey: string }
+  | { owner: "event"; stackId: string; inputKey: string }
+  | { owner: "variable"; variableId: string };
+
+type ExpressionDropLocation = ExpressionDropOwner & {
+  path: ExpressionPathPart[];
+  accepts: "number" | "boolean";
+};
+
 type DragPayload =
   | { source: "palette"; definitionId: string }
   | { source: "workspace"; stackId: string; blockId: string }
@@ -215,7 +228,7 @@ type DragPreviewState = {
   title: string;
   helper: string;
   color: string;
-  shape: "brick" | "event-hat" | "c-block";
+  shape: "brick" | "event-hat" | "c-block" | "value-block";
   x: number;
   y: number;
 };
@@ -228,6 +241,8 @@ type PendingPointerDrag = {
   shape: DragPreviewState["shape"];
   startX: number;
   startY: number;
+  lastX: number;
+  lastY: number;
   started: boolean;
   sourceBlockId?: string;
   sourcePaletteId?: string;
@@ -317,7 +332,8 @@ const uid = () => "id-" + Math.random().toString(16).slice(2) + "-" + Date.now()
 const num = (value: number): Expr => ({ kind: "literal", valueType: "number", value });
 const boolExpr = (value: boolean): Expr => ({ kind: "literal", valueType: "boolean", value });
 const variableExpr = (name: string): Expr => ({ kind: "variable", valueType: "number", name });
-const addExpr = (left: Expr, right: Expr): Expr => ({ kind: "binary", valueType: "number", op: "+", left, right });
+const binaryExpr = (op: BinaryExpr["op"], left: Expr, right: Expr): Expr => ({ kind: "binary", valueType: "number", op, left, right });
+const addExpr = (left: Expr, right: Expr): Expr => binaryExpr("+", left, right);
 const compareExpr = (left: Expr, op: CompareExpr["op"], right: Expr): Expr => ({ kind: "compare", valueType: "boolean", op, left, right });
 
 function isExpr(value: InputValue | undefined): value is Expr {
@@ -526,8 +542,11 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "row", label: "ligne", type: "number", defaultValue: num(20), min: 1, max: 24, compact: true },
   ] },
 
-  { id: "operator-note", title: "7 + 8", help: "Utilise le mode calcul dans un champ arrondi.", kind: "value", category: "operators", color: "#59b45f", inputs: [{ key: "demo", label: "résultat", type: "number", defaultValue: addExpr(num(7), num(8)) }] },
-  { id: "operator-compare", title: "comparer", help: "Utilise une condition hexagonale dans les blocs si.", kind: "value", category: "operators", color: "#59b45f", inputs: [{ key: "demo", label: "test", type: "condition", defaultValue: compareExpr(variableExpr("maVariable"), ">", num(8)) }] },
+  { id: "operator-add", title: "0 + 0", help: "Additionne deux nombres. Glisse ce bloc dans n'importe quelle valeur numérique.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("+", num(0), num(0)) },
+  { id: "operator-subtract", title: "0 − 0", help: "Soustrait le nombre de droite à celui de gauche.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("-", num(0), num(0)) },
+  { id: "operator-multiply", title: "1 × 1", help: "Multiplie deux nombres.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("*", num(1), num(1)) },
+  { id: "operator-divide", title: "10 ÷ 2", help: "Divise le nombre de gauche par celui de droite. Une division par zéro donne 0.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("/", num(10), num(2)) },
+  { id: "operator-compare", title: "0 > 0", help: "Compare deux valeurs dans une condition.", kind: "value", category: "operators", color: "#59b45f", output: compareExpr(num(0), ">", num(0)) },
 
   { id: "show-key", title: "afficher la touche reçue", help: "Écrit la touche lue par le Minitel, dans une pile de touche.", kind: "action", category: "input", color: "#e14d72", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
@@ -1233,8 +1252,14 @@ function exprCode(value: InputValue | undefined, fallback: Expr = num(0)): strin
       return String(Number(expr.value) || 0);
     case "variable":
       return sanitizeIdentifier(expr.name);
-    case "binary":
-      return "(" + exprCode(expr.left) + " " + expr.op + " " + exprCode(expr.right) + ")";
+    case "binary": {
+      const left = exprCode(expr.left);
+      const right = exprCode(expr.right);
+      if (expr.op === "/" || expr.op === "%") {
+        return "((" + right + ") == 0 ? 0 : (" + left + " " + expr.op + " " + right + "))";
+      }
+      return "(" + left + " " + expr.op + " " + right + ")";
+    }
     case "compare":
       return "(" + exprCode(expr.left) + " " + expr.op + " " + exprCode(expr.right) + ")";
   }
@@ -1954,6 +1979,28 @@ function dropLocationKey(location: DropLocation) {
   return [location.stackId, location.ownerId ?? "root", location.slot, String(location.index)].join("|");
 }
 
+function expressionDropLocationKey(location: ExpressionDropLocation) {
+  const ownerKey = location.owner === "block"
+    ? ["block", location.stackId, location.blockId, location.inputKey]
+    : location.owner === "event"
+      ? ["event", location.stackId, location.inputKey]
+      : ["variable", location.variableId];
+  return [...ownerKey, location.accepts, location.path.join(".") || "root"].join("|");
+}
+
+function numberExpression(value: InputValue | undefined): Expr {
+  if (isExpr(value) && value.valueType === "number") return value;
+  const numericValue = typeof value === "number" || typeof value === "string" ? Number(value) : 0;
+  return num(Number.isFinite(numericValue) ? numericValue : 0);
+}
+
+function replaceExprAtPath(root: Expr, path: ExpressionPathPart[], replacement: Expr): Expr {
+  if (path.length === 0) return cloneValue(replacement);
+  if (root.kind !== "binary" && root.kind !== "compare") return root;
+  const [side, ...rest] = path;
+  return { ...root, [side]: replaceExprAtPath(root[side], rest, replacement) };
+}
+
 function setInvisibleDragImage(event: DragEvent<HTMLElement>) {
   const canvas = document.createElement("canvas");
   canvas.width = 1;
@@ -1964,6 +2011,7 @@ function setInvisibleDragImage(event: DragEvent<HTMLElement>) {
 function dragShapeForDefinition(definition: BlockDefinition): DragPreviewState["shape"] {
   if (definition.kind === "event") return "event-hat";
   if (definition.kind === "control") return "c-block";
+  if (definition.kind === "value") return "value-block";
   return "brick";
 }
 
@@ -2002,74 +2050,137 @@ function duplicateBlockInList(blocks: ProgramBlock[], blockId: string): { blocks
   return { blocks: next, done, duplicateIds };
 }
 
-function OperandEditor({ value, variables, onChange }: { value: Expr; variables: VariableDef[]; onChange: (value: Expr) => void }) {
-  const mode = value.kind === "variable" ? "variable" : "literal";
-  return (
-    <span className="operand-editor">
-      <select value={mode} onChange={(event) => onChange(event.target.value === "variable" ? variableExpr(variables[0]?.name ?? "maVariable") : num(0))}>
-        <option value="literal">nombre</option>
-        <option value="variable">variable</option>
-      </select>
-      {value.kind === "variable" ? (
-        <select value={value.name} onChange={(event) => onChange({ ...value, name: event.target.value })}>
-          {variables.map((variable) => (
-            <option value={variable.name} key={variable.id}>{variable.name}</option>
-          ))}
-        </select>
-      ) : (
-        <input type="number" value={String(value.kind === "literal" ? value.value : 0)} onChange={(event) => onChange(num(Number(event.target.value)))} />
-      )}
-    </span>
-  );
-}
-
-function NumberExpressionEditor({ value, variables, onChange }: { value: InputValue | undefined; variables: VariableDef[]; onChange: (value: Expr) => void }) {
-  const expr = isExpr(value) ? value : num(Number(value) || 0);
+function NumberExpressionNode({
+  value,
+  variables,
+  onChange,
+  dropLocation,
+}: {
+  value: Expr;
+  variables: VariableDef[];
+  onChange: (value: Expr) => void;
+  dropLocation?: ExpressionDropLocation;
+}) {
+  const expr = numberExpression(value);
   const mode = expr.kind === "binary" ? "binary" : expr.kind === "variable" ? "variable" : "literal";
+  const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
+  const childLocation = (side: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, side], accepts: "number" } : undefined
+  );
+
   return (
-    <span className="expression-pill number-expression">
-      <select value={mode} onChange={(event) => {
-        if (event.target.value === "variable") onChange(variableExpr(variables[0]?.name ?? "maVariable"));
-        else if (event.target.value === "binary") onChange(addExpr(num(7), num(8)));
-        else onChange(num(0));
-      }}>
+    <span
+      className={"number-expression-node expression-" + mode}
+      data-expression-drop={dropLocation ? JSON.stringify(dropLocation) : undefined}
+      data-expression-drop-key={dropKey}
+      data-expression-accepts={dropLocation?.accepts}
+    >
+      <select
+        className="expression-kind-select"
+        value={mode}
+        aria-label="Type de valeur"
+        title="Type de valeur"
+        onChange={(event) => {
+          if (event.target.value === "variable") {
+            onChange(variableExpr(variables[0]?.name ?? "maVariable"));
+          } else if (event.target.value === "binary") {
+            onChange(binaryExpr("+", cloneValue(expr), num(0)));
+          } else {
+            onChange(num(expr.kind === "literal" && expr.valueType === "number" ? Number(expr.value) || 0 : 0));
+          }
+        }}
+      >
         <option value="literal">nombre</option>
         <option value="variable">variable</option>
         <option value="binary">calcul</option>
       </select>
+
       {mode === "variable" && expr.kind === "variable" ? (
-        <select value={expr.name} onChange={(event) => onChange({ ...expr, name: event.target.value })}>
+        <select className="expression-variable-select" value={expr.name} aria-label="Variable" onChange={(event) => onChange({ ...expr, name: event.target.value })}>
           {variables.map((variable) => (
             <option value={variable.name} key={variable.id}>{variable.name}</option>
           ))}
         </select>
       ) : null}
+
       {mode === "literal" ? (
-        <input type="number" value={String(expr.kind === "literal" ? expr.value : 0)} onChange={(event) => onChange(num(Number(event.target.value)))} />
+        <input
+          type="number"
+          aria-label="Nombre"
+          value={String(expr.kind === "literal" && expr.valueType === "number" ? expr.value : 0)}
+          onChange={(event) => onChange(num(Number(event.target.value)))}
+        />
       ) : null}
+
       {mode === "binary" && expr.kind === "binary" ? (
-        <span className="binary-row">
-          <OperandEditor value={expr.left} variables={variables} onChange={(next) => onChange({ ...expr, left: next })} />
-          <select className="operator-select" value={expr.op} onChange={(event) => onChange({ ...expr, op: event.target.value as BinaryExpr["op"] })}>
+        <span className="binary-expression-tree">
+          <NumberExpressionNode value={expr.left} variables={variables} dropLocation={childLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+          <select className="operator-select" value={expr.op} aria-label="Operation" title="Operation" onChange={(event) => onChange({ ...expr, op: event.target.value as BinaryExpr["op"] })}>
             <option value="+">+</option>
-            <option value="-">-</option>
+            <option value="-">−</option>
             <option value="*">×</option>
             <option value="/">÷</option>
             <option value="%">%</option>
           </select>
-          <OperandEditor value={expr.right} variables={variables} onChange={(next) => onChange({ ...expr, right: next })} />
+          <NumberExpressionNode value={expr.right} variables={variables} dropLocation={childLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
         </span>
       ) : null}
     </span>
   );
 }
 
-function BooleanExpressionEditor({ value, variables, onChange }: { value: InputValue | undefined; variables: VariableDef[]; onChange: (value: Expr) => void }) {
-  const expr = (isExpr(value) && value.kind === "compare" ? value : compareExpr(variableExpr(variables[0]?.name ?? "maVariable"), ">", num(0))) as CompareExpr;
+function NumberExpressionEditor({
+  value,
+  variables,
+  onChange,
+  expressionOwner,
+}: {
+  value: InputValue | undefined;
+  variables: VariableDef[];
+  onChange: (value: Expr) => void;
+  expressionOwner?: ExpressionDropOwner;
+}) {
+  const expr = numberExpression(value);
+  const dropLocation: ExpressionDropLocation | undefined = expressionOwner
+    ? { ...expressionOwner, path: [], accepts: "number" }
+    : undefined;
   return (
-    <span className="expression-pill condition-expression">
-      <OperandEditor value={expr.left} variables={variables} onChange={(next) => onChange({ ...expr, left: next })} />
-      <select className="operator-select" value={expr.op} onChange={(event) => onChange({ ...expr, op: event.target.value as CompareExpr["op"] })}>
+    <span className="expression-pill number-expression">
+      <NumberExpressionNode value={expr} variables={variables} onChange={onChange} dropLocation={dropLocation} />
+    </span>
+  );
+}
+
+function BooleanExpressionEditor({
+  value,
+  variables,
+  onChange,
+  expressionOwner,
+}: {
+  value: InputValue | undefined;
+  variables: VariableDef[];
+  onChange: (value: Expr) => void;
+  expressionOwner?: ExpressionDropOwner;
+}) {
+  const expr = (isExpr(value) && value.kind === "compare"
+    ? value
+    : compareExpr(variableExpr(variables[0]?.name ?? "maVariable"), ">", num(0))) as CompareExpr;
+  const conditionLocation: ExpressionDropLocation | undefined = expressionOwner
+    ? { ...expressionOwner, path: [], accepts: "boolean" }
+    : undefined;
+  const numberLocation = (side: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    expressionOwner ? { ...expressionOwner, path: [side], accepts: "number" } : undefined
+  );
+
+  return (
+    <span
+      className="expression-pill condition-expression"
+      data-expression-drop={conditionLocation ? JSON.stringify(conditionLocation) : undefined}
+      data-expression-drop-key={conditionLocation ? expressionDropLocationKey(conditionLocation) : undefined}
+      data-expression-accepts={conditionLocation?.accepts}
+    >
+      <NumberExpressionNode value={expr.left} variables={variables} dropLocation={numberLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+      <select className="operator-select" value={expr.op} aria-label="Comparaison" onChange={(event) => onChange({ ...expr, op: event.target.value as CompareExpr["op"] })}>
         <option value="==">=</option>
         <option value="!=">≠</option>
         <option value="<">&lt;</option>
@@ -2077,12 +2188,12 @@ function BooleanExpressionEditor({ value, variables, onChange }: { value: InputV
         <option value=">">&gt;</option>
         <option value=">=">≥</option>
       </select>
-      <OperandEditor value={expr.right} variables={variables} onChange={(next) => onChange({ ...expr, right: next })} />
+      <NumberExpressionNode value={expr.right} variables={variables} dropLocation={numberLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
     </span>
   );
 }
 
-function InputControl({ input, value, variables, screens = [], onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; onChange: (value: InputValue) => void }) {
+function InputControl({ input, value, variables, screens = [], expressionOwner, onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; expressionOwner?: ExpressionDropOwner; onChange: (value: InputValue) => void }) {
   const actualValue = value ?? input.defaultValue;
   const stopDrag = (event: MouseEvent) => event.stopPropagation();
   const options = input.options ?? [];
@@ -2091,7 +2202,7 @@ function InputControl({ input, value, variables, screens = [], onChange }: { inp
     return (
       <label className="block-control expression-control" onMouseDown={stopDrag}>
         <span>{input.label}</span>
-        <NumberExpressionEditor value={actualValue} variables={variables} onChange={onChange} />
+        <NumberExpressionEditor value={actualValue} variables={variables} expressionOwner={expressionOwner} onChange={onChange} />
       </label>
     );
   }
@@ -2100,7 +2211,7 @@ function InputControl({ input, value, variables, screens = [], onChange }: { inp
     return (
       <label className="block-control expression-control condition-control" onMouseDown={stopDrag}>
         <span>{input.label}</span>
-        <BooleanExpressionEditor value={actualValue} variables={variables} onChange={onChange} />
+        <BooleanExpressionEditor value={actualValue} variables={variables} expressionOwner={expressionOwner} onChange={onChange} />
       </label>
     );
   }
@@ -2205,7 +2316,6 @@ function PaletteBlock({
       draggable={false}
       onPointerDown={(event) => onPalettePointerDown(definition, event)}
       onDragStart={(event) => {
-        if (definition.kind === "value") return;
         event.dataTransfer.setData(DRAG_TYPE, JSON.stringify({ source: "palette", definitionId: definition.id }));
         event.dataTransfer.effectAllowed = "copy";
         onPaletteDragStart(definition, event);
@@ -2467,7 +2577,7 @@ function ProgramBlockView({
           {definition.inputs && definition.inputs.length > 0 ? (
             <div className="block-inputs">
               {definition.inputs.map((input) => (
-                <InputControl key={input.key} input={input} variables={variables} screens={screens} value={block.values[input.key]} onChange={(value) => onValueChange(stackId, block.id, input.key, value)} />
+                <InputControl key={input.key} input={input} variables={variables} screens={screens} value={block.values[input.key]} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: input.key }} onChange={(value) => onValueChange(stackId, block.id, input.key, value)} />
               ))}
             </div>
           ) : null}
@@ -2541,7 +2651,7 @@ function EventHeader({ stack, variables, onEventValueChange, onDeleteStack, onSt
         {definition.inputs && definition.inputs.length > 0 ? (
           <div className="block-inputs">
             {definition.inputs.map((input) => (
-              <InputControl key={input.key} input={input} variables={variables} value={stack.event.values[input.key]} onChange={(value) => onEventValueChange(stack.id, input.key, value)} />
+              <InputControl key={input.key} input={input} variables={variables} value={stack.event.values[input.key]} expressionOwner={{ owner: "event", stackId: stack.id, inputKey: input.key }} onChange={(value) => onEventValueChange(stack.id, input.key, value)} />
             ))}
           </div>
         ) : null}
@@ -2564,7 +2674,7 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
       {variables.map((variable) => (
         <div className="variable-card" key={variable.id}>
           <input value={variable.name} onChange={(event) => onChange(variable.id, { name: event.target.value })} />
-          <NumberExpressionEditor value={variable.defaultValue} variables={variables} onChange={(value) => onChange(variable.id, { defaultValue: value })} />
+          <NumberExpressionEditor value={variable.defaultValue} variables={variables} expressionOwner={{ owner: "variable", variableId: variable.id }} onChange={(value) => onChange(variable.id, { defaultValue: value })} />
           <button type="button" onClick={() => onRemove(variable.id)} title="Supprimer"><Trash2 size={14} /></button>
         </div>
       ))}
@@ -2642,6 +2752,7 @@ function App() {
   const suppressPaletteClickRef = useRef(false);
   const dragPreviewElementRef = useRef<HTMLDivElement | null>(null);
   const activeDropKeyRef = useRef("");
+  const activeExpressionDropElementRef = useRef<HTMLElement | null>(null);
   const [board, setBoard] = useState("esp32dev");
   const [uploadPort, setUploadPort] = useState("");
   const [serialPorts, setSerialPorts] = useState<SerialPortInfo[]>([]);
@@ -2683,7 +2794,7 @@ function App() {
     setInvisibleDragImage(event);
     setDraggingPaletteId(definition.id);
     setActiveDropKey("");
-    setDragPreview({ title: definition.title, helper: "Nouveau bloc", color: definition.color, shape: dragShapeForDefinition(definition), x: event.clientX, y: event.clientY });
+    setDragPreview({ title: definition.title, helper: definition.output ? "Déposer dans une valeur" : "Nouveau bloc", color: definition.color, shape: dragShapeForDefinition(definition), x: event.clientX, y: event.clientY });
   }
 
   function beginWorkspaceDrag(block: ProgramBlock, definition: BlockDefinition, event: DragEvent<HTMLElement>) {
@@ -2703,6 +2814,8 @@ function App() {
 
   function finishDrag() {
     activeDropKeyRef.current = "";
+    activeExpressionDropElementRef.current?.classList.remove("expression-drop-active");
+    activeExpressionDropElementRef.current = null;
     setDraggingBlockId("");
     setDraggingPaletteId("");
     setDraggingStackId("");
@@ -2711,17 +2824,19 @@ function App() {
   }
 
   function preparePalettePointerDrag(definition: BlockDefinition, event: PointerEvent<HTMLElement>) {
-    if (definition.kind === "value" || event.button !== 0) return;
+    if (event.button !== 0 || (definition.kind === "value" && !definition.output)) return;
     const sourceElement = event.currentTarget;
     sourceElement.setPointerCapture(event.pointerId);
     pendingPointerDragRef.current = {
       payload: { source: "palette", definitionId: definition.id },
       title: definition.title,
-      helper: "Nouveau bloc",
+      helper: definition.output ? "Déposer dans une valeur" : "Nouveau bloc",
       color: definition.color,
       shape: dragShapeForDefinition(definition),
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
       started: false,
       sourcePaletteId: definition.id,
       pointerId: event.pointerId,
@@ -2744,6 +2859,8 @@ function App() {
       shape: "event-hat",
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
       started: false,
       sourceStackId: stack.id,
       pointerId: event.pointerId,
@@ -2766,11 +2883,51 @@ function App() {
       shape: dragShapeForDefinition(definition),
       startX: event.clientX,
       startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
       started: false,
       sourceBlockId: block.id,
       pointerId: event.pointerId,
       sourceElement,
     };
+  }
+
+  function expressionOutputForPayload(payload: DragPayload): Expr | null {
+    if (payload.source !== "palette") return null;
+    const output = blockById[payload.definitionId]?.output;
+    if (!output || (output.valueType !== "number" && output.valueType !== "boolean")) return null;
+    return output;
+  }
+
+  function expressionDropTargetFromPoint(
+    x: number,
+    y: number,
+    output: Expr,
+  ): { element: HTMLElement; location: ExpressionDropLocation } | null {
+    const accepts = output.valueType === "boolean" ? "boolean" : "number";
+    const elements = document.elementsFromPoint(x, y) as HTMLElement[];
+    const visited = new Set<HTMLElement>();
+    for (const element of elements) {
+      const target = element.closest<HTMLElement>("[data-expression-drop]");
+      if (!target || visited.has(target)) continue;
+      visited.add(target);
+      const raw = target.dataset.expressionDrop;
+      if (!raw) continue;
+      try {
+        const location = JSON.parse(raw) as ExpressionDropLocation;
+        if (location.accepts === accepts) return { element: target, location };
+      } catch {
+        // Ignore an obsolete target left by a render in progress.
+      }
+    }
+    return null;
+  }
+
+  function activateExpressionDropTarget(element: HTMLElement | null) {
+    if (activeExpressionDropElementRef.current === element) return;
+    activeExpressionDropElementRef.current?.classList.remove("expression-drop-active");
+    activeExpressionDropElementRef.current = element;
+    element?.classList.add("expression-drop-active");
   }
 
   function dropLocationFromPoint(x: number, y: number): DropLocation | null {
@@ -2816,6 +2973,19 @@ function App() {
   }
 
   function updatePointerDropTarget(x: number, y: number) {
+    const pending = pendingPointerDragRef.current;
+    const output = pending ? expressionOutputForPayload(pending.payload) : null;
+    if (output) {
+      const target = expressionDropTargetFromPoint(x, y, output);
+      activateExpressionDropTarget(target?.element ?? null);
+      if (activeDropKeyRef.current) {
+        activeDropKeyRef.current = "";
+        setActiveDropKey("");
+      }
+      return;
+    }
+
+    activateExpressionDropTarget(null);
     const location = dropLocationFromPoint(x, y);
     const key = location ? dropLocationKey(location) : "";
     if (activeDropKeyRef.current === key) return;
@@ -2826,6 +2996,8 @@ function App() {
   function handlePointerMove(event: PointerEvent<HTMLElement>) {
     const pending = pendingPointerDragRef.current;
     if (!pending) return;
+    pending.lastX = event.clientX;
+    pending.lastY = event.clientY;
     const distance = Math.hypot(event.clientX - pending.startX, event.clientY - pending.startY);
     if (!pending.started && distance >= 5) {
       pending.started = true;
@@ -2850,8 +3022,16 @@ function App() {
     pendingPointerDragRef.current = null;
     if (pending.started) {
       event.preventDefault();
-      const location = dropLocationFromPoint(event.clientX, event.clientY);
-      if (location) handleDropBranch(pending.payload, location);
+      const output = expressionOutputForPayload(pending.payload);
+      if (output) {
+        const target = expressionDropTargetFromPoint(event.clientX, event.clientY, output)
+          ?? expressionDropTargetFromPoint(pending.lastX, pending.lastY, output);
+        if (target) handleDropExpression(pending.payload, target.location);
+        else flashNotice("Dépose l'opération dans une valeur compatible");
+      } else {
+        const location = dropLocationFromPoint(event.clientX, event.clientY);
+        if (location) handleDropBranch(pending.payload, location);
+      }
       window.setTimeout(() => {
         suppressPaletteClickRef.current = false;
       }, 0);
@@ -3140,7 +3320,7 @@ function App() {
   function quickAddDefinition(definition: BlockDefinition) {
     if (suppressPaletteClickRef.current) return;
     if (definition.kind === "value") {
-      flashNotice("Choisis calcul dans un champ arrondi");
+      flashNotice("Fais glisser cette opération dans un champ nombre");
       return;
     }
     if (definition.kind === "event") {
@@ -3158,6 +3338,69 @@ function App() {
     addBlockToStack(activeStackId, definition.id);
   }
 
+  function pulseExpressionTarget(location: ExpressionDropLocation) {
+    const key = expressionDropLocationKey(location);
+    window.requestAnimationFrame(() => {
+      const target = Array.from(document.querySelectorAll<HTMLElement>("[data-expression-drop-key]"))
+        .find((element) => element.dataset.expressionDropKey === key);
+      if (!target) return;
+      target.classList.remove("expression-drop-pulse");
+      void target.offsetWidth;
+      target.classList.add("expression-drop-pulse");
+      target.addEventListener("animationend", () => target.classList.remove("expression-drop-pulse"), { once: true });
+    });
+  }
+
+  function handleDropExpression(payload: DragPayload, location: ExpressionDropLocation) {
+    const output = expressionOutputForPayload(payload);
+    if (!output || output.valueType !== location.accepts) return;
+    const replacement = cloneValue(output);
+    const replaceValue = (value: InputValue | undefined): Expr => {
+      const root = isExpr(value)
+        ? value
+        : location.accepts === "boolean"
+          ? boolExpr(Boolean(value))
+          : numberExpression(value);
+      return replaceExprAtPath(root, location.path, replacement);
+    };
+
+    pushHistory();
+    if (location.owner === "block") {
+      setStacks((current) => current.map((stack) => (
+        stack.id === location.stackId
+          ? {
+              ...stack,
+              blocks: updateBlockTree(stack.blocks, location.blockId, (block) => ({
+                ...block,
+                values: { ...block.values, [location.inputKey]: replaceValue(block.values[location.inputKey]) },
+              })),
+            }
+          : stack
+      )));
+    } else if (location.owner === "event") {
+      setStacks((current) => current.map((stack) => (
+        stack.id === location.stackId
+          ? {
+              ...stack,
+              event: {
+                ...stack.event,
+                values: { ...stack.event.values, [location.inputKey]: replaceValue(stack.event.values[location.inputKey]) },
+              },
+            }
+          : stack
+      )));
+    } else {
+      setVariables((current) => current.map((variable) => (
+        variable.id === location.variableId
+          ? { ...variable, defaultValue: replaceValue(variable.defaultValue) }
+          : variable
+      )));
+    }
+
+    pulseExpressionTarget(location);
+    flashNotice(output.valueType === "boolean" ? "Condition insérée" : "Opération imbriquée");
+  }
+
   function handleDropBranch(payload: DragPayload, location: DropLocation) {
     setActiveDropKey("");
     if (payload.source === "palette") {
@@ -3167,7 +3410,7 @@ function App() {
         return;
       }
       if (definition.kind === "value") {
-        flashNotice("Cette valeur se glisse dans les champs");
+        flashNotice("Fais glisser cette opération dans une valeur compatible");
         return;
       }
       const block = makeProjectBlock(payload.definitionId);
@@ -3744,7 +3987,7 @@ function App() {
   }
 
   return (
-    <div className={"app-shell" + (dragPreview ? " dragging-active" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
+    <div className={"app-shell" + (dragPreview ? " dragging-active" : "") + (blockById[draggingPaletteId]?.output?.valueType === "number" ? " expression-number-dragging" : blockById[draggingPaletteId]?.output?.valueType === "boolean" ? " expression-boolean-dragging" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
       <header className="topbar">
         <div className="brand-mark"><img src={appLogo} alt="" /></div>
         <div className="brand-copy">

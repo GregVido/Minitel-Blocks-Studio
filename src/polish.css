@@ -659,8 +659,8 @@ textarea:focus-visible {
   flex-wrap: wrap;
 }
 
-.binary-row,
-.operand-editor {
+.binary-expression-tree,
+.number-expression-node {
   max-width: 100%;
   flex-wrap: wrap;
 }
@@ -759,6 +759,13 @@ textarea:focus-visible {
   background: rgba(38, 121, 234, 0.025);
 }
 
+.app-shell.dragging-active.expression-number-dragging .drop-target,
+.app-shell.dragging-active.expression-boolean-dragging .drop-target {
+  height: 14px;
+  min-height: 14px;
+  background: transparent;
+}
+
 .drop-target.active,
 .app-shell.dragging-active .drop-target:hover {
   height: 14px;
@@ -806,6 +813,12 @@ textarea:focus-visible {
 
 .drag-preview.event-hat {
   border-radius: 24px 7px 7px 7px;
+}
+
+.drag-preview.value-block {
+  min-width: 132px;
+  min-height: 40px;
+  border-radius: 999px;
 }
 
 .drag-preview small {

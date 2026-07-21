@@ -1016,57 +1016,169 @@ button {
 
 .expression-pill {
   display: inline-flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  min-height: 28px;
-  padding: 3px;
+  max-width: 100%;
+  min-height: 29px;
+  color: #172033;
+}
+
+.number-expression {
+  padding: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.number-expression-node {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 29px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 3px;
+  border: 1px solid rgba(28, 48, 74, 0.16);
   border-radius: 999px;
   background: #ffffff;
   color: #172033;
-  box-shadow: inset 0 0 0 1px rgba(23, 32, 51, 0.12);
+  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.08);
+  transform-origin: center;
+  transition:
+    transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease,
+    outline-color 150ms ease;
 }
 
-.condition-expression {
-  border-radius: 12px;
-  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
-  padding-left: 12px;
-  padding-right: 12px;
-  background: #f7c948;
+.number-expression-node.expression-binary {
+  flex-wrap: wrap;
+  border-color: rgba(45, 145, 76, 0.34);
+  border-radius: 7px;
+  background: #eaf8ee;
+  box-shadow: inset 0 0 0 1px rgba(66, 173, 98, 0.08), 0 1px 3px rgba(23, 80, 42, 0.1);
 }
 
-.operand-editor,
-.binary-row {
+.binary-expression-tree {
+  min-width: 0;
+  max-width: 100%;
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
 }
 
-.expression-pill select,
-.expression-pill input,
-.operand-editor select,
-.operand-editor input,
-.variable-control select {
-  height: 24px;
-  border: 0;
-  border-radius: 999px;
-  background: #eef3f8;
-  color: #172033;
-  padding: 0 8px;
-  outline: none;
-  font-size: 12px;
-  font-weight: 850;
+.number-expression-node .number-expression-node {
+  background: rgba(255, 255, 255, 0.94);
 }
 
+.condition-expression {
+  position: relative;
+  flex-wrap: wrap;
+  border-radius: 12px;
+  clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
+  padding: 4px 13px;
+  background: #f7c948;
+  box-shadow: inset 0 0 0 1px rgba(111, 77, 0, 0.14);
+  transform-origin: center;
+  transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 150ms ease, box-shadow 150ms ease;
+}
+
+.expression-pill select,
 .expression-pill input,
-.operand-editor input {
+.number-expression-node select,
+.number-expression-node input,
+.variable-control select {
+  height: 25px;
+  min-width: 0;
+  border: 0;
+  border-radius: 5px;
+  background: #edf3f7;
+  color: #172033;
+  padding: 0 7px;
+  outline: none;
+  font-size: 11px;
+  font-weight: 850;
+  transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.expression-pill select:focus-visible,
+.expression-pill input:focus-visible,
+.number-expression-node select:focus-visible,
+.number-expression-node input:focus-visible {
+  background: #ffffff;
+  box-shadow: 0 0 0 2px rgba(36, 119, 235, 0.35);
+}
+
+.expression-kind-select {
+  width: 64px;
+}
+
+.expression-variable-select {
+  width: min(105px, 26vw);
+}
+
+.number-expression-node input[type="number"] {
   width: 58px;
 }
 
 .operator-select {
-  width: 42px;
+  width: 38px;
   text-align: center;
   color: #172033;
+}
+
+.app-shell.expression-number-dragging [data-expression-accepts="number"],
+.app-shell.expression-boolean-dragging [data-expression-accepts="boolean"] {
+  outline: 2px dashed rgba(36, 119, 235, 0.62);
+  outline-offset: 2px;
+  animation: expressionSocketBreathe 900ms ease-in-out infinite alternate;
+}
+
+.expression-drop-active {
+  z-index: 3;
+  outline: 3px solid #2477eb !important;
+  outline-offset: 3px !important;
+  background: #dcf6e4 !important;
+  box-shadow: 0 0 0 6px rgba(36, 119, 235, 0.15), 0 8px 20px rgba(25, 72, 139, 0.2) !important;
+  transform: scale(1.045);
+  animation: expressionTargetHover 520ms ease-in-out infinite alternate !important;
+}
+
+.condition-expression.expression-drop-active {
+  filter: brightness(1.05) saturate(1.08);
+}
+
+.expression-drop-pulse {
+  animation: expressionDropPulse 430ms cubic-bezier(0.16, 1, 0.3, 1) both !important;
+}
+
+@keyframes expressionSocketBreathe {
+  from { outline-color: rgba(36, 119, 235, 0.38); }
+  to { outline-color: rgba(36, 119, 235, 0.82); }
+}
+
+@keyframes expressionTargetHover {
+  from { transform: scale(1.025); }
+  to { transform: scale(1.055); }
+}
+
+@keyframes expressionDropPulse {
+  0% { transform: scale(0.88); opacity: 0.55; filter: brightness(1.2); }
+  58% { transform: scale(1.09); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; filter: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell.expression-number-dragging [data-expression-accepts="number"],
+  .app-shell.expression-boolean-dragging [data-expression-accepts="boolean"],
+  .expression-drop-active,
+  .expression-drop-pulse {
+    animation: none !important;
+  }
 }
 
 .variable-manager,
@@ -1779,6 +1891,17 @@ button {
 .drag-preview.c-block {
   min-width: 190px;
   border-radius: 8px;
+}
+
+.drag-preview.value-block {
+  min-width: 132px;
+  min-height: 40px;
+  padding: 8px 13px 10px;
+  border-radius: 999px;
+}
+
+.drag-preview.value-block::before {
+  display: none;
 }
 
 .drag-preview::before {

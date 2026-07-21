@@ -15,6 +15,7 @@ import GripVertical from "lucide-react/dist/esm/icons/grip-vertical.js";
 import Keyboard from "lucide-react/dist/esm/icons/keyboard.js";
 import ListTree from "lucide-react/dist/esm/icons/list-tree.js";
 import Monitor from "lucide-react/dist/esm/icons/monitor.js";
+import Moon from "lucide-react/dist/esm/icons/moon.js";
 import MousePointer2 from "lucide-react/dist/esm/icons/mouse-pointer-2.js";
 import Palette from "lucide-react/dist/esm/icons/palette.js";
 import Pause from "lucide-react/dist/esm/icons/pause.js";
@@ -30,6 +31,7 @@ import Save from "lucide-react/dist/esm/icons/save.js";
 import Sigma from "lucide-react/dist/esm/icons/sigma.js";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles.js";
 import StepForward from "lucide-react/dist/esm/icons/step-forward.js";
+import Sun from "lucide-react/dist/esm/icons/sun.js";
 import Terminal from "lucide-react/dist/esm/icons/terminal.js";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2.js";
 import Type from "lucide-react/dist/esm/icons/type.js";
@@ -63,6 +65,7 @@ type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable"
 type ExprType = "number" | "boolean" | "text";
 type RightTab = "preview" | "code" | "upload";
 type WorkspaceMode = "blocks" | "designer";
+type AppTheme = "light" | "dark";
 
 type SelectOption = {
   label: string;
@@ -296,6 +299,19 @@ const BLOCK_MOTION_MS = 430;
 const HISTORY_LIMIT = 80;
 const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
 const PROJECT_FILE_VERSION = 2;
+const APP_THEME_STORAGE_KEY = "minitel-blocks-theme";
+
+function readInitialAppTheme(): AppTheme {
+  try {
+    const saved = window.localStorage.getItem(APP_THEME_STORAGE_KEY);
+    if (saved === "light" || saved === "dark") return saved;
+  } catch {}
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+const initialAppTheme = readInitialAppTheme();
+document.documentElement.dataset.theme = initialAppTheme;
+document.documentElement.style.colorScheme = initialAppTheme;
 
 const uid = () => "id-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
 const num = (value: number): Expr => ({ kind: "literal", valueType: "number", value });
@@ -2556,11 +2572,36 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
   );
 }
 
+function SettingsDialog({ open, theme, onThemeChange, onClose }: { open: boolean; theme: AppTheme; onThemeChange: (theme: AppTheme) => void; onClose: () => void }) {
+  if (!open) return null;
+  return (
+    <div className="settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header className="settings-header">
+          <div className="settings-icon"><Settings2 size={20} /></div>
+          <div><span>Préférences</span><h2 id="settings-title">Paramètres</h2></div>
+          <button type="button" className="settings-close" onClick={onClose} title="Fermer"><X size={18} /></button>
+        </header>
+        <div className="settings-body">
+          <div className="settings-section-title"><Palette size={17} /><span>Apparence</span></div>
+          <div className="settings-theme-control" role="group" aria-label="Thème de l'interface">
+            <button type="button" className={theme === "light" ? "active" : ""} aria-pressed={theme === "light"} onClick={() => onThemeChange("light")}><Sun size={19} /><span>Clair</span></button>
+            <button type="button" className={theme === "dark" ? "active" : ""} aria-pressed={theme === "dark"} onClick={() => onThemeChange("dark")}><Moon size={19} /><span>Sombre</span></button>
+          </div>
+        </div>
+        <footer className="settings-footer"><button type="button" onClick={onClose}>Terminé</button></footer>
+      </section>
+    </div>
+  );
+}
+
 function App() {
   const initialProjectRef = useRef<ProjectSnapshot | null>(null);
   if (!initialProjectRef.current) initialProjectRef.current = createInitialProject();
   const initialProject = initialProjectRef.current;
   const [appView, setAppView] = useState<"projects" | "studio">("projects");
+  const [theme, setTheme] = useState<AppTheme>(initialAppTheme);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [projects, setProjects] = useState<ManagedProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [currentProject, setCurrentProject] = useState<ManagedProjectSummary | null>(null);
@@ -2623,6 +2664,14 @@ function App() {
   }), [currentProject?.createdAt, currentProject?.name]);
   const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId }, board, currentMetadata) : "", [activeScreenId, board, currentMetadata, currentProject, screenConfig, screens, stacks, variables]);
   const projectDirty = Boolean(currentProject && currentSignature !== lastSavedSignatureRef.current);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    try {
+      window.localStorage.setItem(APP_THEME_STORAGE_KEY, theme);
+    } catch {}
+  }, [theme]);
 
   function moveDragPreview(event: { clientX: number; clientY: number }) {
     if (!event.clientX && !event.clientY) return;
@@ -2968,6 +3017,7 @@ function App() {
       if (event.key === "Escape") {
         if (pendingPointerDragRef.current) cancelPointerDrag();
         if (examplesOpen) setExamplesOpen(false);
+        if (settingsOpen) setSettingsOpen(false);
         return;
       }
       if (event.ctrlKey || event.metaKey) {
@@ -3006,7 +3056,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeScreenId, appView, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, stacks, variables]);
+  }, [activeScreenId, appView, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -3673,19 +3723,23 @@ function App() {
 
   if (appView === "projects") {
     return (
-      <ProjectHub
-        projects={projects}
-        selectedId={selectedProjectId}
-        loading={libraryLoading}
-        busy={libraryBusy}
-        message={libraryMessage}
-        onSelectedId={setSelectedProjectId}
-        onRefresh={() => void refreshProjectLibrary()}
-        onOpen={openManagedProject}
-        onCreate={createManagedProject}
-        onImport={importProjectToLibrary}
-        onDelete={deleteManagedProject}
-      />
+      <>
+        <ProjectHub
+          projects={projects}
+          selectedId={selectedProjectId}
+          loading={libraryLoading}
+          busy={libraryBusy}
+          message={libraryMessage}
+          onSelectedId={setSelectedProjectId}
+          onRefresh={() => void refreshProjectLibrary()}
+          onOpen={openManagedProject}
+          onCreate={createManagedProject}
+          onImport={importProjectToLibrary}
+          onDelete={deleteManagedProject}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
+        <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)} />
+      </>
     );
   }
 
@@ -3718,6 +3772,7 @@ function App() {
             </button>
           ) : null}
           <button type="button" className="tool-button icon-only" onClick={() => void goToProjectLibrary()} title="Retour aux projets (Ctrl+O)"><House size={18} /></button>
+          <button type="button" className="tool-button icon-only" onClick={() => setSettingsOpen(true)} title="Ouvrir les paramètres"><Settings2 size={18} /></button>
           <div className="history-actions" aria-label="Historique">
             <button type="button" className="tool-button icon-only" onClick={undo} disabled={history.past.length === 0} title="Annuler (Ctrl+Z)"><Undo2 size={18} /></button>
             <button type="button" className="tool-button icon-only" onClick={redo} disabled={history.future.length === 0} title="Rétablir (Ctrl+Y)"><Redo2 size={18} /></button>
@@ -3725,7 +3780,6 @@ function App() {
           <button type="button" className={"tool-button save-state-" + saveState} onClick={() => void saveProject()} disabled={saveState === "saving"} title="Sauvegarder le projet (Ctrl+S)"><Save size={18} /><span>{saveState === "saving" ? "Sauvegarde..." : "Sauvegarder"}</span></button>
           <button type="button" className="tool-button" onClick={() => void exportProjectFile()} title="Exporter une copie .mbs"><FileDown size={18} /><span>Exporter</span></button>
           <button type="button" className="tool-button" onClick={() => setExamplesOpen(true)} title="Ouvrir les exemples"><Wand2 size={18} /><span>Exemples</span></button>
-          <button type="button" className={"tool-button " + (workspaceMode === "designer" ? "active" : "")} onClick={() => setWorkspaceMode("designer")} title="Composer l'écran"><Monitor size={18} /><span>Écran</span></button>
           <button type="button" className="tool-button" onClick={exportSketch} title="Exporter vers Arduino"><Download size={18} /><span>Arduino</span></button>
           <button type="button" className="tool-button primary" onClick={uploadSketch} title="Téléverser sur l'ESP32"><Upload size={18} /><span>Téléverser</span></button>
         </div>
@@ -3885,6 +3939,7 @@ function App() {
         </div>
       ) : null}
 
+      <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)} />
       <div className={"notice " + (notice ? "show" : "")}>{notice}</div>
     </div>
   );

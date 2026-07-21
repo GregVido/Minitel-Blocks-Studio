@@ -12,6 +12,7 @@ import Palette from "lucide-react/dist/esm/icons/palette.js";
 import Plus from "lucide-react/dist/esm/icons/plus.js";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw.js";
 import Search from "lucide-react/dist/esm/icons/search.js";
+import Settings2 from "lucide-react/dist/esm/icons/settings-2.js";
 import Trash2 from "lucide-react/dist/esm/icons/trash-2.js";
 import Upload from "lucide-react/dist/esm/icons/upload.js";
 import X from "lucide-react/dist/esm/icons/x.js";
@@ -35,6 +36,7 @@ type ProjectHubProps = {
   onCreate: (settings: NewProjectSettings) => Promise<boolean>;
   onImport: () => Promise<void>;
   onDelete: (id: string) => Promise<boolean>;
+  onOpenSettings: () => void;
 };
 
 type HubStyle = CSSProperties & {
@@ -183,7 +185,7 @@ function NewProjectDialog({ open, busy, onClose, onCreate }: { open: boolean; bu
   );
 }
 
-export default function ProjectHub({ projects, selectedId, loading, busy, message, onSelectedId, onRefresh, onOpen, onCreate, onImport, onDelete }: ProjectHubProps) {
+export default function ProjectHub({ projects, selectedId, loading, busy, message, onSelectedId, onRefresh, onOpen, onCreate, onImport, onDelete, onOpenSettings }: ProjectHubProps) {
   const [search, setSearch] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const [createOpen, setCreateOpen] = useState(false);
@@ -222,7 +224,7 @@ export default function ProjectHub({ projects, selectedId, loading, busy, messag
       <header className="hub-titlebar">
         <div className="hub-app-identity"><img src={appLogo} alt="" /><div><strong>Minitel Blocks Studio</strong><span>Bibliothèque locale</span></div></div>
         <div className="hub-location"><span className="active"><Monitor size={16} />Mes projets</span></div>
-        <div className="hub-titlebar-status"><i /><span>Prêt</span></div>
+        <div className="hub-titlebar-status"><i /><span>Prêt</span><button type="button" className="hub-icon-button" onClick={onOpenSettings} title="Ouvrir les paramètres"><Settings2 size={17} /></button></div>
       </header>
 
       <div className="hub-toolbar">

@@ -21,6 +21,7 @@ export type MinitelScreenConfig = {
   name: string;
   columns: number;
   rows: number;
+  colorEnabled: boolean;
 };
 
 export type SceneColor = "Black" | "Red" | "Green" | "Yellow" | "Blue" | "Magenta" | "Cyan" | "White";
@@ -132,7 +133,7 @@ const localUid = () => "scene-" + Math.random().toString(16).slice(2) + "-" + Da
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(value)));
 
 export function createDefaultScreenConfig(): MinitelScreenConfig {
-  return { preset: "minitel-40", name: "Minitel 40 colonnes", columns: 40, rows: 24 };
+  return { preset: "minitel-40", name: "Minitel 40 colonnes", columns: 40, rows: 24, colorEnabled: true };
 }
 
 export function createMinitelScene(name = "Écran principal", elements: SceneElement[] = []): MinitelScene {
@@ -284,7 +285,8 @@ function ImageImportModal({ sourceDataUrl, sourceName, config, onClose, onImport
   const [contrast, setContrast] = useState(18);
   const [invert, setInvert] = useState(false);
   const [fit, setFit] = useState<ImageFit>("contain");
-  const [color, setColor] = useState<SceneColor>("Cyan");
+  const [color, setColor] = useState<SceneColor>(config.colorEnabled ? "Cyan" : "White");
+  const effectiveColor: SceneColor = config.colorEnabled ? color : "White";
 
   useEffect(() => {
     const nextImage = new Image();
@@ -303,7 +305,7 @@ function ImageImportModal({ sourceDataUrl, sourceName, config, onClose, onImport
         </header>
         <div className="image-import-layout">
           <div className="image-preview-stage">
-            {processed.bitmap ? <PixelPreview {...processed} color={color} /> : <div className="image-loading">Préparation de l'image...</div>}
+            {processed.bitmap ? <PixelPreview {...processed} color={effectiveColor} /> : <div className="image-loading">Préparation de l'image...</div>}
             <div className="image-preview-meta"><span>{width} × {height} cellules</span><span>{processed.width} × {processed.height} pixels mosaïque</span></div>
           </div>
           <div className="image-algorithm-panel">
@@ -324,23 +326,24 @@ function ImageImportModal({ sourceDataUrl, sourceName, config, onClose, onImport
             <label className="slider-setting"><span>Contraste <strong>{contrast}</strong></span><input type="range" min="-100" max="100" value={contrast} onChange={(event) => setContrast(Number(event.target.value))} /></label>
             <div className="setting-row two-columns">
               <label><span>Cadrage</span><select value={fit} onChange={(event) => setFit(event.target.value as ImageFit)}><option value="contain">Image entière</option><option value="cover">Remplir</option><option value="stretch">Étirer</option></select></label>
-              <label><span>Couleur</span><select value={color} onChange={(event) => setColor(event.target.value as SceneColor)}>{sceneColors.filter((item) => item !== "Black").map((item) => <option value={item} key={item}>{colorLabels[item]}</option>)}</select></label>
+              <label><span>Couleur</span><select value={effectiveColor} disabled={!config.colorEnabled} onChange={(event) => setColor(event.target.value as SceneColor)}>{sceneColors.filter((item) => item !== "Black").map((item) => <option value={item} key={item}>{colorLabels[item]}</option>)}</select></label>
             </div>
             <label className="toggle-setting"><input type="checkbox" checked={invert} onChange={(event) => setInvert(event.target.checked)} /><span>Inverser les pixels</span></label>
           </div>
         </div>
         <footer className="modal-footer">
           <button type="button" className="secondary-button" onClick={onClose}>Annuler</button>
-          <button type="button" className="primary-button" disabled={!processed.bitmap} onClick={() => onImport(makeSceneImage(sourceName.replace(/\.[^.]+$/, "") || "Image", 1, 1, width, height, processed.bitmap, color))}><Upload size={17} /><span>Ajouter à l'écran</span></button>
+          <button type="button" className="primary-button" disabled={!processed.bitmap} onClick={() => onImport(makeSceneImage(sourceName.replace(/\.[^.]+$/, "") || "Image", 1, 1, width, height, processed.bitmap, effectiveColor))}><Upload size={17} /><span>Ajouter à l'écran</span></button>
         </footer>
       </section>
     </div>
   );
 }
 
-function ColorSelect({ value, onChange, label }: { value: SceneColor; onChange: (color: SceneColor) => void; label: string }) {
+function ColorSelect({ value, onChange, label, enabled = true, monochromeValue = "White" }: { value: SceneColor; onChange: (color: SceneColor) => void; label: string; enabled?: boolean; monochromeValue?: SceneColor }) {
+  const displayedValue = enabled ? value : monochromeValue;
   return (
-    <label className="property-field color-property"><span>{label}</span><span className="property-color-dot" style={{ background: colorValues[value] }} /><select value={value} onChange={(event) => onChange(event.target.value as SceneColor)}>{sceneColors.map((color) => <option value={color} key={color}>{colorLabels[color]}</option>)}</select></label>
+    <label className="property-field color-property"><span>{label}</span><span className="property-color-dot" style={{ background: colorValues[displayedValue] }} /><select value={displayedValue} disabled={!enabled} onChange={(event) => onChange(event.target.value as SceneColor)}>{sceneColors.map((color) => <option value={color} key={color}>{colorLabels[color]}</option>)}</select></label>
   );
 }
 
@@ -368,8 +371,8 @@ function ElementInspector({ element, config, onChange, onDelete }: { element: Sc
         {element.kind !== "text" ? <label className="property-field"><span>Largeur</span><input type="number" min="1" max={config.columns} value={element.width} onChange={(event) => changeSize(Number(event.target.value), element.height)} /></label> : null}
         {element.kind !== "text" ? <label className="property-field"><span>Hauteur</span><input type="number" min="1" max={config.rows} value={element.height} onChange={(event) => changeSize(element.width, Number(event.target.value))} /></label> : null}
       </div>
-      <ColorSelect label="Couleur" value={element.fg} onChange={(fg) => onChange({ ...element, fg } as SceneElement)} />
-      {element.kind === "text" ? <ColorSelect label="Fond" value={element.bg} onChange={(bg) => onChange({ ...element, bg })} /> : null}
+      <ColorSelect label="Couleur" value={element.fg} enabled={config.colorEnabled} onChange={(fg) => onChange({ ...element, fg } as SceneElement)} />
+      {element.kind === "text" ? <ColorSelect label="Fond" value={element.bg} enabled={config.colorEnabled} monochromeValue="Black" onChange={(bg) => onChange({ ...element, bg })} /> : null}
       {element.kind === "text" ? <label className="property-field property-wide"><span>Taille</span><select value={element.size} onChange={(event) => onChange({ ...element, size: event.target.value as SceneTextSize })}><option value="Normal">Normale</option><option value="DoubleWidth">Double largeur</option><option value="DoubleHeight">Double hauteur</option><option value="DoubleSize">Double taille</option></select></label> : null}
       {element.kind === "box" ? <label className="toggle-setting"><input type="checkbox" checked={element.filled} onChange={(event) => onChange({ ...element, filled: event.target.checked })} /><span>Cadre rempli</span></label> : null}
     </div>
@@ -481,7 +484,7 @@ export function ScreenDesigner({ config, screens, activeScreenId, onConfigChange
 
   function changePreset(presetId: ScreenPresetId) {
     const preset = screenPresets.find((item) => item.id === presetId) ?? screenPresets[0];
-    onConfigChange({ preset: preset.id, name: preset.name, columns: preset.columns, rows: preset.rows });
+    onConfigChange({ ...config, preset: preset.id, name: preset.name, columns: preset.columns, rows: preset.rows });
   }
 
   function uniqueScreenName(base: string) {
@@ -551,14 +554,14 @@ export function ScreenDesigner({ config, screens, activeScreenId, onConfigChange
           <div className="designer-toolbar">
             <div className="designer-tools">
               <button type="button" onClick={() => addElement(makeSceneText("Nouveau texte", 2, 2, "White"))}><Type size={16} /><span>Texte</span></button>
-              <button type="button" onClick={() => addElement(makeSceneBox(2, 4, Math.min(18, config.columns - 1), Math.min(8, config.rows - 3), "Cyan"))}><Square size={16} /><span>Cadre</span></button>
+              <button type="button" onClick={() => addElement(makeSceneBox(2, 4, Math.min(18, config.columns - 1), Math.min(8, config.rows - 3), config.colorEnabled ? "Cyan" : "White"))}><Square size={16} /><span>Cadre</span></button>
               <button type="button" onClick={() => fileInputRef.current?.click()}><ImagePlus size={16} /><span>Image</span></button>
               <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" onChange={(event) => { handleFile(event.target.files?.[0]); event.currentTarget.value = ""; }} />
             </div>
             <div className="designer-size-badge"><Maximize2 size={15} /><span>{config.columns} × {config.rows}</span></div>
           </div>
           <div className="designer-stage">
-            <div className="designer-screen" ref={screenRef} style={screenStyle} onPointerMove={moveElement} onPointerUp={finishElementDrag} onPointerCancel={finishElementDrag} onPointerDown={(event) => { if (event.target === event.currentTarget) setSelectedId(""); }}>
+            <div className={"designer-screen" + (config.colorEnabled ? "" : " monochrome")} ref={screenRef} style={screenStyle} onPointerMove={moveElement} onPointerUp={finishElementDrag} onPointerCancel={finishElementDrag} onPointerDown={(event) => { if (event.target === event.currentTarget) setSelectedId(""); }}>
               <div className="designer-safe-area" />
               {displayedElements.map((element) => {
                 const dimensions = elementDimensions(element);
@@ -567,14 +570,14 @@ export function ScreenDesigner({ config, screens, activeScreenId, onConfigChange
                   "--element-y": element.y - 1,
                   "--element-width": dimensions.width,
                   "--element-height": dimensions.height,
-                  "--element-fg": colorValues[element.fg],
-                  "--element-bg": element.kind === "text" ? colorValues[element.bg] : "transparent",
+                  "--element-fg": colorValues[config.colorEnabled ? element.fg : "White"],
+                  "--element-bg": element.kind === "text" ? colorValues[config.colorEnabled ? element.bg : "Black"] : "transparent",
                 } as DesignerStyle;
                 return (
                   <div className={"scene-element " + element.kind + (selectedId === element.id ? " selected" : "") + (dragPreview?.id === element.id ? " dragging" : "")} style={elementStyle} key={element.id} onPointerDown={(event) => beginElementDrag(event, element, "move")} title="Déplacer l'élément">
                     {element.kind === "text" ? <span className={"scene-text " + element.size}>{element.text || "Texte"}</span> : null}
                     {element.kind === "box" ? <span className={"scene-box " + (element.filled ? "filled" : "")} /> : null}
-                    {element.kind === "image" ? <PixelPreview bitmap={element.bitmap} width={element.width * 2} height={element.height * 3} color={element.fg} /> : null}
+                    {element.kind === "image" ? <PixelPreview bitmap={element.bitmap} width={element.width * 2} height={element.height * 3} color={config.colorEnabled ? element.fg : "White"} /> : null}
                     {element.kind !== "text" && selectedId === element.id ? <button type="button" className="scene-resize-handle" onPointerDown={(event) => beginElementDrag(event, element, "resize")} title="Redimensionner"><Maximize2 size={12} /></button> : null}
                   </div>
                 );
@@ -585,11 +588,12 @@ export function ScreenDesigner({ config, screens, activeScreenId, onConfigChange
         <aside className="designer-inspector">
           <div className="designer-settings">
             <div className="inspector-title"><Settings2 size={16} /><span>Format du Minitel</span></div>
+            <label className="toggle-setting"><input type="checkbox" checked={config.colorEnabled} onChange={(event) => onConfigChange({ ...config, colorEnabled: event.target.checked })} /><span>Affichage couleur</span></label>
             <label className="property-field property-wide"><span>Modèle</span><select value={config.preset} onChange={(event) => changePreset(event.target.value as ScreenPresetId)}>{screenPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.label}</option>)}</select></label>
             <label className="property-field property-wide"><span>Nom du modèle</span><input value={config.name} onChange={(event) => onConfigChange({ ...config, name: event.target.value, preset: config.preset === "custom" ? "custom" : config.preset })} /></label>
             <div className="property-grid">
-              <label className="property-field"><span>Colonnes</span><input type="number" min="20" max="40" value={config.columns} onChange={(event) => onConfigChange({ ...config, preset: "custom", columns: clamp(Number(event.target.value), 20, 40) })} /></label>
-              <label className="property-field"><span>Lignes</span><input type="number" min="12" max="24" value={config.rows} onChange={(event) => onConfigChange({ ...config, preset: "custom", rows: clamp(Number(event.target.value), 12, 24) })} /></label>
+              <label className="property-field"><span>Colonnes</span><input type="number" min="20" max="80" value={config.columns} onChange={(event) => onConfigChange({ ...config, preset: "custom", columns: clamp(Number(event.target.value), 20, 80) })} /></label>
+              <label className="property-field"><span>Lignes</span><input type="number" min="12" max="40" value={config.rows} onChange={(event) => onConfigChange({ ...config, preset: "custom", rows: clamp(Number(event.target.value), 12, 40) })} /></label>
             </div>
           </div>
           <div className="designer-properties">

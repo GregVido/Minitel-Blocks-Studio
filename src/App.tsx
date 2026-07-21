@@ -6,10 +6,10 @@ import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
 import Copy from "lucide-react/dist/esm/icons/copy.js";
 import Cpu from "lucide-react/dist/esm/icons/cpu.js";
 import Download from "lucide-react/dist/esm/icons/download.js";
-import Eraser from "lucide-react/dist/esm/icons/eraser.js";
 import Eye from "lucide-react/dist/esm/icons/eye.js";
 import FileCode2 from "lucide-react/dist/esm/icons/file-code-2.js";
-import FolderOpen from "lucide-react/dist/esm/icons/folder-open.js";
+import FileDown from "lucide-react/dist/esm/icons/file-down.js";
+import House from "lucide-react/dist/esm/icons/house.js";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch.js";
 import GripVertical from "lucide-react/dist/esm/icons/grip-vertical.js";
 import Keyboard from "lucide-react/dist/esm/icons/keyboard.js";
@@ -56,6 +56,7 @@ import {
   type SceneElement,
   type SceneImageElement,
 } from "./screen-designer";
+import ProjectHub, { type NewProjectSettings } from "./project-hub";
 
 type BlockKind = "event" | "action" | "control" | "value";
 type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen";
@@ -161,12 +162,24 @@ type ProjectSnapshot = {
   activeScreenId: string;
 };
 
+type ProjectMetadata = {
+  name: string;
+  createdAt: string;
+};
+
 type ProjectFile = {
   format: "minitel-blocks-studio";
   version: 2;
   savedAt: string;
   board: string;
+  metadata: ProjectMetadata;
   project: ProjectSnapshot;
+};
+
+type ParsedProjectFile = {
+  project: ProjectSnapshot;
+  board: string;
+  metadata: ProjectMetadata;
 };
 
 type HistoryState = {
@@ -238,6 +251,7 @@ type PreviewState = {
   baudRate: number;
   messages: string[];
   variables: Record<string, number>;
+  colorEnabled: boolean;
 };
 
 type UploadResult = {
@@ -265,6 +279,7 @@ type DragPreviewStyle = CSSProperties & {
 type CodeContext = {
   keyVariable?: string;
   screens?: MinitelScene[];
+  colorEnabled?: boolean;
 };
 
 type ProjectExample = {
@@ -671,6 +686,7 @@ function normalizeImportedScreenConfig(value: unknown): MinitelScreenConfig {
     name,
     columns: Number.isFinite(columnsValue) ? clamp(columnsValue, 8, 80) : fallback.columns,
     rows: Number.isFinite(rowsValue) ? clamp(rowsValue, 8, 40) : fallback.rows,
+    colorEnabled: source?.colorEnabled !== false,
   };
 }
 
@@ -744,18 +760,31 @@ function repairScreenReferencesInStacks(stacks: ScriptStack[], screens: MinitelS
   return stacks.map((stack) => ({ ...stack, blocks: repairScreenReferencesInBlocks(stack.blocks, screens) }));
 }
 
-function serializeProjectFile(snapshot: ProjectSnapshot, board: string) {
+function cleanProjectName(value: unknown, fallback = "Projet Minitel") {
+  if (typeof value !== "string") return fallback;
+  const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+  return cleaned.slice(0, 80) || fallback;
+}
+
+function validProjectDate(value: unknown, fallback: string) {
+  if (typeof value !== "string") return fallback;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+}
+
+function serializeProjectFile(snapshot: ProjectSnapshot, board: string, metadata: ProjectMetadata) {
   const document: ProjectFile = {
     format: PROJECT_FILE_FORMAT,
     version: PROJECT_FILE_VERSION,
     savedAt: new Date().toISOString(),
     board: supportedProjectBoards.has(board) ? board : "esp32dev",
+    metadata: { name: cleanProjectName(metadata.name), createdAt: validProjectDate(metadata.createdAt, new Date().toISOString()) },
     project: cloneProjectSnapshot(snapshot),
   };
   return JSON.stringify(document, null, 2);
 }
 
-function parseProjectFile(contents: string): { project: ProjectSnapshot; board: string } {
+function parseProjectFile(contents: string): ParsedProjectFile {
   const parsed = JSON.parse(contents) as unknown;
   const document = importedRecord(parsed);
   if (!document) throw new Error("Ce fichier ne contient pas de projet.");
@@ -792,7 +821,13 @@ function parseProjectFile(contents: string): { project: ProjectSnapshot; board: 
     activeScreenId,
   };
   const board = typeof document.board === "string" && supportedProjectBoards.has(document.board) ? document.board : "esp32dev";
-  return { project, board };
+  const savedAt = validProjectDate(document.savedAt, new Date().toISOString());
+  const metadataSource = importedRecord(document.metadata);
+  const metadata = {
+    name: cleanProjectName(metadataSource?.name, "Projet importé"),
+    createdAt: validProjectDate(metadataSource?.createdAt, savedAt),
+  };
+  return { project, board, metadata };
 }
 
 const previewColors: Record<string, string> = {
@@ -1028,6 +1063,147 @@ function createInitialProject() {
   return projectExamples[0].create();
 }
 
+
+const BROWSER_PROJECT_LIBRARY_KEY = "minitel-blocks-project-library-v1";
+
+type BrowserProjectRecord = {
+  id: string;
+  contents: string;
+  modifiedAt: string;
+};
+
+function createNewProjectSnapshot(settings: NewProjectSettings): ProjectSnapshot {
+  const columns = clamp(settings.columns, 20, 80);
+  const rows = clamp(settings.rows, 12, 40);
+  const preset: MinitelScreenConfig["preset"] =
+    columns === 40 && rows === 24 ? "minitel-40" :
+    columns === 32 && rows === 20 ? "small-32" :
+    columns === 40 && rows === 20 ? "compact" : "custom";
+  const screenConfig: MinitelScreenConfig = {
+    preset,
+    name: "Minitel " + columns + " × " + rows,
+    columns,
+    rows,
+    colorEnabled: settings.colorEnabled,
+  };
+  const screen = createMinitelScene("Écran principal");
+  return {
+    stacks: createBlankStacks(),
+    variables: createDefaultVariables(),
+    screenConfig,
+    screens: [screen],
+    activeScreenId: screen.id,
+  };
+}
+
+function projectSnapshotSignature(snapshot: ProjectSnapshot, board: string, metadata: ProjectMetadata) {
+  return JSON.stringify({
+    board: supportedProjectBoards.has(board) ? board : "esp32dev",
+    metadata: { name: cleanProjectName(metadata.name), createdAt: validProjectDate(metadata.createdAt, "") },
+    project: cloneProjectSnapshot(snapshot),
+  });
+}
+
+function countBlocksInProject(blocks: ProgramBlock[]): number {
+  return blocks.reduce((total, block) => total + 1 + countBlocksInProject(block.children ?? []) + countBlocksInProject(block.elseChildren ?? []), 0);
+}
+
+function summarizeManagedProject(id: string, contents: string, modifiedAt: string): ManagedProjectSummary {
+  const parsed = parseProjectFile(contents);
+  const firstScreen = parsed.project.screens[0];
+  const previewText = (firstScreen?.elements ?? [])
+    .filter((element): element is Extract<SceneElement, { kind: "text" }> => element.kind === "text")
+    .map((element) => element.text.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return {
+    id,
+    name: parsed.metadata.name,
+    createdAt: parsed.metadata.createdAt,
+    modifiedAt: validProjectDate(modifiedAt, new Date().toISOString()),
+    columns: parsed.project.screenConfig.columns,
+    rows: parsed.project.screenConfig.rows,
+    colorEnabled: parsed.project.screenConfig.colorEnabled,
+    screenCount: parsed.project.screens.length,
+    blockCount: parsed.project.stacks.reduce((total, stack) => total + countBlocksInProject(stack.blocks), 0),
+    previewText,
+  };
+}
+
+function readBrowserProjectRecords(): BrowserProjectRecord[] {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(BROWSER_PROJECT_LIBRARY_KEY) || "[]") as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is BrowserProjectRecord => {
+      if (!item || typeof item !== "object") return false;
+      const record = item as Partial<BrowserProjectRecord>;
+      return typeof record.id === "string" && typeof record.contents === "string" && typeof record.modifiedAt === "string";
+    });
+  } catch {
+    return [];
+  }
+}
+
+function writeBrowserProjectRecords(records: BrowserProjectRecord[]) {
+  window.localStorage.setItem(BROWSER_PROJECT_LIBRARY_KEY, JSON.stringify(records));
+}
+
+
+async function readManagedProjectLibrary(): Promise<ManagedProjectSummary[]> {
+  const bridge = window.minitelStudio;
+  if (bridge?.listProjects) {
+    const result = await bridge.listProjects();
+    if (!result.ok) throw new Error(result.error || "Impossible de lire les projets.");
+    return [...result.projects].sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+  }
+  return readBrowserProjectRecords()
+    .flatMap((record) => {
+      try {
+        return [summarizeManagedProject(record.id, record.contents, record.modifiedAt)];
+      } catch {
+        return [];
+      }
+    })
+    .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+}
+
+async function loadManagedProjectRecord(id: string): Promise<{ contents: string; project: ManagedProjectSummary }> {
+  const bridge = window.minitelStudio;
+  if (bridge?.loadProject) {
+    const result = await bridge.loadProject(id);
+    if (!result.ok || !result.contents || !result.project) throw new Error(result.error || "Ce projet ne peut pas être ouvert.");
+    return { contents: result.contents, project: result.project };
+  }
+  const record = readBrowserProjectRecords().find((item) => item.id === id);
+  if (!record) throw new Error("Ce projet n'existe plus.");
+  return { contents: record.contents, project: summarizeManagedProject(id, record.contents, record.modifiedAt) };
+}
+
+async function saveManagedProjectRecord(id: string | undefined, contents: string): Promise<ManagedProjectSummary> {
+  const bridge = window.minitelStudio;
+  if (bridge?.saveProject) {
+    const result = await bridge.saveProject({ id, contents });
+    if (!result.ok || !result.project) throw new Error(result.error || "Impossible de sauvegarder ce projet.");
+    return result.project;
+  }
+  const projectId = id || (typeof crypto.randomUUID === "function" ? crypto.randomUUID() : uid());
+  const modifiedAt = new Date().toISOString();
+  const records = readBrowserProjectRecords().filter((item) => item.id !== projectId);
+  records.push({ id: projectId, contents, modifiedAt });
+  writeBrowserProjectRecords(records);
+  return summarizeManagedProject(projectId, contents, modifiedAt);
+}
+
+async function deleteManagedProjectRecord(id: string) {
+  const bridge = window.minitelStudio;
+  if (bridge?.deleteProject) {
+    const result = await bridge.deleteProject(id);
+    if (!result.ok) throw new Error(result.error || "Impossible de supprimer ce projet.");
+    return;
+  }
+  writeBrowserProjectRecords(readBrowserProjectRecords().filter((item) => item.id !== id));
+}
+
 function exprCode(value: InputValue | undefined, fallback: Expr = num(0)): string {
   const expr = isExpr(value) ? value : fallback;
   switch (expr.kind) {
@@ -1186,13 +1362,13 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "minitel.setTextSize(MinitelESP32::TextSize::" + textValue(values.size, "Normal") + ");");
         break;
       case "foreground":
-        pushLine(lines, indent, "minitel.foreground(" + colorEnum(values.color) + ");");
+        pushLine(lines, indent, "minitel.foreground(" + colorEnum(context?.colorEnabled === false ? "White" : values.color) + ");");
         break;
       case "background":
-        pushLine(lines, indent, "minitel.background(" + colorEnum(values.color) + ");");
+        pushLine(lines, indent, "minitel.background(" + colorEnum(context?.colorEnabled === false ? "Black" : values.color) + ");");
         break;
       case "set-colors":
-        pushLine(lines, indent, "minitel.colors(" + colorEnum(values.fg) + ", " + colorEnum(values.bg) + ");");
+        pushLine(lines, indent, "minitel.colors(" + colorEnum(context?.colorEnabled === false ? "White" : values.fg) + ", " + colorEnum(context?.colorEnabled === false ? "Black" : values.bg) + ");");
         break;
       case "beep":
         pushLine(lines, indent, "minitel.beep((uint8_t)(" + exprCode(values.times, num(1)) + "), (uint16_t)(" + exprCode(values.gap, num(80)) + "));");
@@ -1299,12 +1475,14 @@ function screenFunctionName(screen: MinitelScene) {
   return "drawScreen_" + screen.id.replace(/[^A-Za-z0-9_]/g, "_");
 }
 
-function appendSceneCode(lines: string[], elements: SceneElement[], indent: number) {
+function appendSceneCode(lines: string[], elements: SceneElement[], indent: number, colorEnabled: boolean) {
   if (elements.length === 0) return;
   pushLine(lines, indent, "// Composition créée dans le mode Écran");
   elements.forEach((element) => {
+    const foreground = colorEnabled ? element.fg : "White";
+    const background = colorEnabled && element.kind === "text" ? element.bg : "Black";
     if (element.kind === "text") {
-      pushLine(lines, indent, "minitel.colors(MinitelESP32::Color::" + element.fg + ", MinitelESP32::Color::" + element.bg + ");");
+      pushLine(lines, indent, "minitel.colors(MinitelESP32::Color::" + foreground + ", MinitelESP32::Color::" + background + ");");
       pushLine(lines, indent, "minitel.setTextSize(MinitelESP32::TextSize::" + element.size + ");");
       pushLine(lines, indent, "minitel.moveTo(" + element.x + ", " + element.y + ");");
       pushLine(lines, indent, "minitel.sendText(" + cppString(element.text) + ");");
@@ -1312,7 +1490,7 @@ function appendSceneCode(lines: string[], elements: SceneElement[], indent: numb
       return;
     }
 
-    pushLine(lines, indent, "minitel.foreground(MinitelESP32::Color::" + element.fg + ");");
+    pushLine(lines, indent, "minitel.foreground(MinitelESP32::Color::" + foreground + ");");
     pushLine(lines, indent, "minitel.graphicMode();");
     if (element.kind === "box") {
       const loopId = element.id.replace(/[^A-Za-z0-9_]/g, "_");
@@ -1364,12 +1542,12 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
 
   screens.forEach((screen) => {
     lines.push("", "// Écran : " + screen.name.replace(/[\r\n]+/g, " "), "void " + screenFunctionName(screen) + "() {", "  minitel.resetDisplay();");
-    appendSceneCode(lines, screen.elements, 2);
+    appendSceneCode(lines, screen.elements, 2, screenConfig.colorEnabled);
     lines.push("}");
   });
 
   lines.push("", "void setup() {", "  minitel.begin();", "  minitel.resetDisplay();");
-  setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens }));
+  setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens, colorEnabled: screenConfig.colorEnabled }));
   lines.push("}", "", "void loop() {");
 
   if (keyStacks.length > 0) {
@@ -1380,12 +1558,12 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       } else {
         lines.push("  if (" + keyCondition(stack.event.values.key) + ") {");
       }
-      appendBlockCode(lines, stack.blocks, 4, variables, { keyVariable: "key", screens });
+      appendBlockCode(lines, stack.blocks, 4, variables, { keyVariable: "key", screens, colorEnabled: screenConfig.colorEnabled });
       lines.push("  }");
     });
   }
 
-  loopStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens }));
+  loopStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens, colorEnabled: screenConfig.colorEnabled }));
   lines.push("  delay(10);", "}");
   return lines.join("\n");
 }
@@ -1399,7 +1577,7 @@ function createPreviewState(variables: VariableDef[], screenConfig: MinitelScree
   variables.forEach((variable) => {
     values[variable.name] = exprPreviewNumber(variable.defaultValue, values, 0);
   });
-  return { cells: emptyPreviewCells(screenConfig.columns, screenConfig.rows), columns: screenConfig.columns, rows: screenConfig.rows, cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", baudRate: 1200, messages: [], variables: values };
+  return { cells: emptyPreviewCells(screenConfig.columns, screenConfig.rows), columns: screenConfig.columns, rows: screenConfig.rows, cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", baudRate: 1200, messages: [], variables: values, colorEnabled: screenConfig.colorEnabled };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -1496,14 +1674,14 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         state.messages.push("Taille: " + state.textSize);
         break;
       case "foreground":
-        state.fg = previewColors[textValue(values.color, "White")];
+        state.fg = state.colorEnabled ? previewColors[textValue(values.color, "White")] : previewColors.White;
         break;
       case "background":
-        state.bg = previewColors[textValue(values.color, "Black")];
+        state.bg = state.colorEnabled ? previewColors[textValue(values.color, "Black")] : previewColors.Black;
         break;
       case "set-colors":
-        state.fg = previewColors[textValue(values.fg, "White")];
-        state.bg = previewColors[textValue(values.bg, "Black")];
+        state.fg = state.colorEnabled ? previewColors[textValue(values.fg, "White")] : previewColors.White;
+        state.bg = state.colorEnabled ? previewColors[textValue(values.bg, "Black")] : previewColors.Black;
         break;
       case "beep":
         state.messages.push("Bip x" + clamp(exprPreviewNumber(values.times, state.variables, 1), 0, 99));
@@ -1601,9 +1779,9 @@ function mosaicPreviewCharacter(element: SceneImageElement, cellX: number, cellY
 
 function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   elements.forEach((element) => {
-    state.fg = previewColors[element.fg];
+    state.fg = state.colorEnabled ? previewColors[element.fg] : previewColors.White;
     if (element.kind === "text") {
-      state.bg = previewColors[element.bg];
+      state.bg = state.colorEnabled ? previewColors[element.bg] : previewColors.Black;
       state.textSize = element.size;
       setCursor(state, element.x, element.y);
       writePreviewText(state, element.text);
@@ -2382,6 +2560,15 @@ function App() {
   const initialProjectRef = useRef<ProjectSnapshot | null>(null);
   if (!initialProjectRef.current) initialProjectRef.current = createInitialProject();
   const initialProject = initialProjectRef.current;
+  const [appView, setAppView] = useState<"projects" | "studio">("projects");
+  const [projects, setProjects] = useState<ManagedProjectSummary[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [currentProject, setCurrentProject] = useState<ManagedProjectSummary | null>(null);
+  const [libraryLoading, setLibraryLoading] = useState(true);
+  const [libraryBusy, setLibraryBusy] = useState(false);
+  const [libraryMessage, setLibraryMessage] = useState("");
+  const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving" | "error">("saved");
+  const lastSavedSignatureRef = useRef("");
   const [activeCategory, setActiveCategory] = useState("start");
   const [variables, setVariables] = useState<VariableDef[]>(() => initialProject.variables);
   const [stacks, setStacks] = useState<ScriptStack[]>(() => initialProject.stacks);
@@ -2430,6 +2617,12 @@ function App() {
   const sceneElements = activeScreen?.elements ?? [];
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens), [screenConfig, screens, stacks, variables]);
   const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, screens), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys]);
+  const currentMetadata = useMemo<ProjectMetadata>(() => ({
+    name: currentProject?.name ?? "Projet Minitel",
+    createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
+  }), [currentProject?.createdAt, currentProject?.name]);
+  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId }, board, currentMetadata) : "", [activeScreenId, board, currentMetadata, currentProject, screenConfig, screens, stacks, variables]);
+  const projectDirty = Boolean(currentProject && currentSignature !== lastSavedSignatureRef.current);
 
   function moveDragPreview(event: { clientX: number; clientY: number }) {
     if (!event.clientX && !event.clientY) return;
@@ -2754,6 +2947,14 @@ function App() {
   }
 
   useEffect(() => {
+    void refreshProjectLibrary();
+  }, []);
+
+  useEffect(() => {
+    if (appView === "studio" && currentProject && saveState !== "saving" && saveState !== "error") setSaveState(projectDirty ? "dirty" : "saved");
+  }, [appView, currentProject, projectDirty, saveState]);
+
+  useEffect(() => {
     if (!simRunning) return undefined;
     const timer = window.setInterval(() => setSimTick((current) => current + 1), simSpeed);
     return () => window.clearInterval(timer);
@@ -2773,15 +2974,16 @@ function App() {
         const key = event.key.toLowerCase();
         if (key === "s") {
           event.preventDefault();
-          void saveProject();
+          if (appView === "studio") void saveProject();
           return;
         }
         if (key === "o") {
           event.preventDefault();
-          void openProject();
+          if (appView === "studio") void goToProjectLibrary();
+          else if (selectedProjectId) void openManagedProject(selectedProjectId);
           return;
         }
-        if (isTyping) return;
+        if (isTyping || appView !== "studio") return;
         if (key === "z") {
           event.preventDefault();
           if (event.shiftKey) redo();
@@ -2797,14 +2999,14 @@ function App() {
       if (isTyping) return;
 
       const simulatedKey = event.key === "Enter" || event.key === "Backspace" ? event.key : event.key.length === 1 ? event.key.toUpperCase() : "";
-      if (rightTab === "preview" && keyOptions.some((option) => option.value === simulatedKey)) {
+      if (appView === "studio" && rightTab === "preview" && keyOptions.some((option) => option.value === simulatedKey)) {
         event.preventDefault();
         triggerSimulatedKey(simulatedKey);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeScreenId, board, examplesOpen, history, rightTab, screenConfig, screens, stacks, variables]);
+  }, [activeScreenId, appView, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, stacks, variables]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -3150,12 +3352,12 @@ function App() {
   }
 
 
-  function fallbackSaveProject(contents: string) {
+  function fallbackSaveProject(contents: string, suggestedName: string) {
     const blob = new Blob([contents], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "Mon-projet-Minitel.mbs";
+    anchor.download = suggestedName;
     anchor.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
@@ -3192,50 +3394,201 @@ function App() {
     });
   }
 
-  async function saveProject() {
-    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId }, board);
+  function applyProjectToStudio(parsed: ParsedProjectFile, summary: ManagedProjectSummary) {
+    const next = cloneProjectSnapshot(parsed.project);
+    clearPendingDeletes();
+    finishDrag();
+    setStacks(next.stacks);
+    setVariables(next.variables);
+    setScreenConfig(next.screenConfig);
+    setScreens(next.screens);
+    setActiveScreenId(next.activeScreenId);
+    setBoard(parsed.board);
+    setCurrentProject(summary);
+    setSelectedProjectId(summary.id);
+    setSelectedStackId(next.stacks[0]?.id ?? "");
+    setWorkspaceMode(next.screens.some((screen) => screen.elements.length > 0) ? "designer" : "blocks");
+    setRightTab("preview");
+    setHistory({ past: [], future: [] });
+    setSimRunning(false);
+    setSimTick(0);
+    setSimulatedKeys([]);
+    setExamplesOpen(false);
+    lastSavedSignatureRef.current = projectSnapshotSignature(next, parsed.board, { name: summary.name, createdAt: summary.createdAt });
+    setSaveState("saved");
+    setNotice("Projet prêt");
+    setAppView("studio");
+  }
+
+  async function refreshProjectLibrary() {
+    setLibraryLoading(true);
     try {
-      if (window.minitelStudio?.exportProject) {
-        const result = await window.minitelStudio.exportProject({ suggestedName: "Mon-projet-Minitel.mbs", contents });
-        if (result.canceled) {
-          flashNotice("Sauvegarde annulée");
-          return;
-        }
-        if (!result.ok) throw new Error(result.error || "La sauvegarde a échoué.");
-      } else {
-        fallbackSaveProject(contents);
-      }
-      flashNotice("Projet sauvegardé");
+      const nextProjects = await readManagedProjectLibrary();
+      setProjects(nextProjects);
+      setSelectedProjectId((current) => nextProjects.some((project) => project.id === current) ? current : nextProjects[0]?.id ?? "");
+      setLibraryMessage(nextProjects.length === 0 ? "Crée ton premier projet pour commencer." : "");
     } catch (error) {
-      flashNotice(error instanceof Error ? error.message : "Impossible de sauvegarder le projet");
+      setLibraryMessage(error instanceof Error ? error.message : "Impossible de lire les projets.");
+    } finally {
+      setLibraryLoading(false);
     }
   }
 
-  async function openProject() {
+  async function openManagedProject(id: string) {
+    if (!id || libraryBusy) return;
+    setLibraryBusy(true);
+    setLibraryMessage("Ouverture du projet...");
+    try {
+      const loaded = await loadManagedProjectRecord(id);
+      const parsed = parseProjectFile(loaded.contents);
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+      applyProjectToStudio(parsed, loaded.project);
+      setLibraryMessage("");
+    } catch (error) {
+      setLibraryMessage(error instanceof Error ? error.message : "Impossible d'ouvrir ce projet.");
+    } finally {
+      setLibraryBusy(false);
+    }
+  }
+
+  async function createManagedProject(settings: NewProjectSettings) {
+    if (libraryBusy) return false;
+    setLibraryBusy(true);
+    setLibraryMessage("Création du projet...");
+    try {
+      const snapshot = createNewProjectSnapshot(settings);
+      const metadata = { name: cleanProjectName(settings.name), createdAt: new Date().toISOString() };
+      const contents = serializeProjectFile(snapshot, "esp32dev", metadata);
+      const summary = await saveManagedProjectRecord(undefined, contents);
+      setProjects((current) => [summary, ...current.filter((project) => project.id !== summary.id)]);
+      applyProjectToStudio({ project: snapshot, board: "esp32dev", metadata }, summary);
+      setLibraryMessage("");
+      return true;
+    } catch (error) {
+      setLibraryMessage(error instanceof Error ? error.message : "Impossible de créer le projet.");
+      return false;
+    } finally {
+      setLibraryBusy(false);
+    }
+  }
+
+  async function deleteManagedProject(id: string) {
+    if (!id || libraryBusy) return false;
+    setLibraryBusy(true);
+    try {
+      await deleteManagedProjectRecord(id);
+      await new Promise((resolve) => window.setTimeout(resolve, 220));
+      setProjects((current) => {
+        const next = current.filter((project) => project.id !== id);
+        setSelectedProjectId((selected) => selected === id ? next[0]?.id ?? "" : selected);
+        return next;
+      });
+      setLibraryMessage("Projet supprimé.");
+      return true;
+    } catch (error) {
+      setLibraryMessage(error instanceof Error ? error.message : "Impossible de supprimer ce projet.");
+      return false;
+    } finally {
+      setLibraryBusy(false);
+    }
+  }
+
+  async function saveProject(): Promise<boolean> {
+    if (!currentProject || libraryBusy) return false;
+    setLibraryBusy(true);
+    setSaveState("saving");
+    const snapshot = { stacks, variables, screenConfig, screens, activeScreenId };
+    const metadata = { name: currentProject.name, createdAt: currentProject.createdAt };
+    try {
+      const contents = serializeProjectFile(snapshot, board, metadata);
+      const summary = await saveManagedProjectRecord(currentProject.id, contents);
+      const nextProjects = [summary, ...projects.filter((project) => project.id !== summary.id)]
+        .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+      setProjects(nextProjects);
+      setCurrentProject(summary);
+      lastSavedSignatureRef.current = projectSnapshotSignature(snapshot, board, metadata);
+      setSaveState("saved");
+      flashNotice("Projet sauvegardé");
+      return true;
+    } catch (error) {
+      setSaveState("error");
+      flashNotice(error instanceof Error ? error.message : "Impossible de sauvegarder le projet");
+      return false;
+    } finally {
+      setLibraryBusy(false);
+    }
+  }
+
+  async function exportProjectFile() {
+    if (!currentProject) return;
+    const suggestedName = cleanProjectName(currentProject.name).replace(/\s+/g, "-") + ".mbs";
+    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId }, board, currentMetadata);
+    try {
+      if (window.minitelStudio?.exportProject) {
+        const result = await window.minitelStudio.exportProject({ suggestedName, contents });
+        if (result.canceled) {
+          flashNotice("Export annulé");
+          return;
+        }
+        if (!result.ok) throw new Error(result.error || "L'export a échoué.");
+      } else {
+        fallbackSaveProject(contents, suggestedName);
+      }
+      flashNotice("Copie du projet exportée");
+    } catch (error) {
+      flashNotice(error instanceof Error ? error.message : "Impossible d'exporter le projet");
+    }
+  }
+
+  async function importProjectToLibrary() {
+    if (libraryBusy) return;
+    setLibraryBusy(true);
+    setLibraryMessage("Import du projet...");
     try {
       let contents: string | null = null;
+      let filePath = "";
       if (window.minitelStudio?.importProject) {
         const result = await window.minitelStudio.importProject();
         if (result.canceled) {
-          flashNotice("Ouverture annulée");
+          setLibraryMessage("Import annulé.");
           return;
         }
         if (!result.ok || !result.contents) throw new Error(result.error || "Impossible de lire ce projet.");
         contents = result.contents;
+        filePath = result.filePath || "";
       } else {
         contents = await fallbackOpenProject();
       }
       if (!contents) return;
-      const imported = parseProjectFile(contents);
-      pushHistory();
-      restoreSnapshot(imported.project);
-      setBoard(imported.board);
-      setWorkspaceMode(imported.project.screens.some((screen) => screen.elements.length > 0) ? "designer" : "blocks");
-      setRightTab("preview");
-      flashNotice("Projet restauré");
+      const parsed = parseProjectFile(contents);
+      const fileName = filePath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "";
+      const metadata = {
+        name: parsed.metadata.name === "Projet importé" && fileName ? cleanProjectName(fileName) : parsed.metadata.name,
+        createdAt: parsed.metadata.createdAt,
+      };
+      const normalized = serializeProjectFile(parsed.project, parsed.board, metadata);
+      const summary = await saveManagedProjectRecord(undefined, normalized);
+      setProjects((current) => [summary, ...current.filter((project) => project.id !== summary.id)]);
+      applyProjectToStudio({ ...parsed, metadata }, summary);
+      setLibraryMessage("");
     } catch (error) {
-      flashNotice(error instanceof Error ? error.message : "Ce fichier de projet est invalide");
+      setLibraryMessage(error instanceof Error ? error.message : "Ce fichier de projet est invalide.");
+    } finally {
+      setLibraryBusy(false);
     }
+  }
+
+  async function goToProjectLibrary() {
+    if (libraryBusy) return;
+    if (projectDirty) {
+      const saved = await saveProject();
+      if (!saved) return;
+    }
+    finishDrag();
+    setSimRunning(false);
+    setExamplesOpen(false);
+    setAppView("projects");
+    await refreshProjectLibrary();
   }
 
   async function copyCode() {
@@ -3318,13 +3671,31 @@ function App() {
     appUpdate.status === "error" ? "Réessayer" :
     appUpdate.message;
 
+  if (appView === "projects") {
+    return (
+      <ProjectHub
+        projects={projects}
+        selectedId={selectedProjectId}
+        loading={libraryLoading}
+        busy={libraryBusy}
+        message={libraryMessage}
+        onSelectedId={setSelectedProjectId}
+        onRefresh={() => void refreshProjectLibrary()}
+        onOpen={openManagedProject}
+        onCreate={createManagedProject}
+        onImport={importProjectToLibrary}
+        onDelete={deleteManagedProject}
+      />
+    );
+  }
+
   return (
     <div className={"app-shell" + (dragPreview ? " dragging-active" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
       <header className="topbar">
         <div className="brand-mark"><img src={appLogo} alt="" /></div>
         <div className="brand-copy">
-          <h1>Minitel Blocks Studio</h1>
-          <p>{screenConfig.name} · {screenConfig.columns} × {screenConfig.rows}</p>
+          <h1>{currentProject?.name ?? "Projet Minitel"}</h1>
+          <p>Minitel Blocks Studio · {screenConfig.columns} × {screenConfig.rows} · {screenConfig.colorEnabled ? "couleur" : "monochrome"} <span className={"project-save-state " + saveState}>{saveState === "saving" ? "Sauvegarde..." : saveState === "dirty" ? "Modifié" : saveState === "error" ? "Erreur de sauvegarde" : "Sauvegardé"}</span></p>
         </div>
         <div className="topbar-actions">
           {appUpdate && updateVisible ? (
@@ -3346,13 +3717,13 @@ function App() {
               ) : null}
             </button>
           ) : null}
+          <button type="button" className="tool-button icon-only" onClick={() => void goToProjectLibrary()} title="Retour aux projets (Ctrl+O)"><House size={18} /></button>
           <div className="history-actions" aria-label="Historique">
             <button type="button" className="tool-button icon-only" onClick={undo} disabled={history.past.length === 0} title="Annuler (Ctrl+Z)"><Undo2 size={18} /></button>
             <button type="button" className="tool-button icon-only" onClick={redo} disabled={history.future.length === 0} title="Rétablir (Ctrl+Y)"><Redo2 size={18} /></button>
           </div>
-          <button type="button" className="tool-button" onClick={resetProgram} title="Nouveau programme"><Eraser size={18} /><span>Nouveau</span></button>
-          <button type="button" className="tool-button" onClick={() => void openProject()} title="Ouvrir un projet (Ctrl+O)"><FolderOpen size={18} /><span>Ouvrir</span></button>
-          <button type="button" className="tool-button" onClick={() => void saveProject()} title="Sauvegarder le projet (Ctrl+S)"><Save size={18} /><span>Sauvegarder</span></button>
+          <button type="button" className={"tool-button save-state-" + saveState} onClick={() => void saveProject()} disabled={saveState === "saving"} title="Sauvegarder le projet (Ctrl+S)"><Save size={18} /><span>{saveState === "saving" ? "Sauvegarde..." : "Sauvegarder"}</span></button>
+          <button type="button" className="tool-button" onClick={() => void exportProjectFile()} title="Exporter une copie .mbs"><FileDown size={18} /><span>Exporter</span></button>
           <button type="button" className="tool-button" onClick={() => setExamplesOpen(true)} title="Ouvrir les exemples"><Wand2 size={18} /><span>Exemples</span></button>
           <button type="button" className={"tool-button " + (workspaceMode === "designer" ? "active" : "")} onClick={() => setWorkspaceMode("designer")} title="Composer l'écran"><Monitor size={18} /><span>Écran</span></button>
           <button type="button" className="tool-button" onClick={exportSketch} title="Exporter vers Arduino"><Download size={18} /><span>Arduino</span></button>

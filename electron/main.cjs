@@ -4,6 +4,7 @@ const path = require("path");
 const os = require("os");
 const fs = require("fs/promises");
 const fsSync = require("fs");
+const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 
 const isDevelopment = !app.isPackaged;
@@ -466,6 +467,88 @@ function safeProjectFileName(value) {
   return /\.mbs$/i.test(name) ? name : name + ".mbs";
 }
 
+const MAX_PROJECT_FILE_SIZE = 32 * 1024 * 1024;
+
+function projectLibraryRoot() {
+  return path.join(app.getPath("userData"), "projects");
+}
+
+function safeManagedProjectId(value) {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9-]{8,80}$/.test(id) ? id : "";
+}
+
+function cleanProjectTitle(value) {
+  const title = String(value || "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return title || "Projet sans nom";
+}
+
+function parseManagedProjectDocument(contents) {
+  const document = JSON.parse(contents);
+  if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error("Format de projet invalide.");
+  if (document.format !== undefined && document.format !== "minitel-blocks-studio") throw new Error("Format de projet invalide.");
+  const project = document.project && typeof document.project === "object" && !Array.isArray(document.project) ? document.project : document;
+  if (!Array.isArray(project.stacks)) throw new Error("Les blocs du projet sont absents.");
+  return { document, project };
+}
+
+function countManagedBlocks(blocks) {
+  if (!Array.isArray(blocks)) return 0;
+  return blocks.reduce((count, block) => {
+    if (!block || typeof block !== "object") return count;
+    return count + 1 + countManagedBlocks(block.children) + countManagedBlocks(block.elseChildren);
+  }, 0);
+}
+
+function managedProjectSummary(id, parsed, stats) {
+  const { document, project } = parsed;
+  const metadata = document.metadata && typeof document.metadata === "object" && !Array.isArray(document.metadata) ? document.metadata : {};
+  const config = project.screenConfig && typeof project.screenConfig === "object" && !Array.isArray(project.screenConfig) ? project.screenConfig : {};
+  const screens = Array.isArray(project.screens) ? project.screens : [];
+  const firstScreen = screens.find((screen) => screen && typeof screen === "object") || null;
+  const elements = Array.isArray(firstScreen && firstScreen.elements) ? firstScreen.elements : [];
+  const previewText = elements
+    .filter((element) => element && element.kind === "text" && typeof element.text === "string" && element.text.trim())
+    .map((element) => element.text.replace(/[\r\n]+/g, " ").trim().slice(0, 48))
+    .slice(0, 3);
+  const stacks = Array.isArray(project.stacks) ? project.stacks : [];
+  const requestedCreatedAt = typeof metadata.createdAt === "string" && Number.isFinite(Date.parse(metadata.createdAt)) ? metadata.createdAt : "";
+  return {
+    id,
+    name: cleanProjectTitle(metadata.name || document.name),
+    createdAt: requestedCreatedAt || stats.birthtime.toISOString(),
+    modifiedAt: stats.mtime.toISOString(),
+    columns: Math.max(8, Math.min(80, Math.round(Number(config.columns) || 40))),
+    rows: Math.max(8, Math.min(40, Math.round(Number(config.rows) || 24))),
+    colorEnabled: config.colorEnabled !== false,
+    screenCount: Math.max(1, screens.length),
+    blockCount: stacks.reduce((count, stack) => count + countManagedBlocks(stack && stack.blocks), 0),
+    previewText,
+  };
+}
+
+async function ensureProjectLibrary() {
+  const root = projectLibraryRoot();
+  await fs.mkdir(root, { recursive: true });
+  return root;
+}
+
+async function readManagedProject(id) {
+  const safeId = safeManagedProjectId(id);
+  if (!safeId) throw new Error("Projet inconnu.");
+  const root = await ensureProjectLibrary();
+  const filePath = path.join(root, safeId + ".mbs");
+  const stats = await fs.stat(filePath);
+  if (!stats.isFile() || stats.size > MAX_PROJECT_FILE_SIZE) throw new Error("Ce projet est trop volumineux.");
+  const contents = await fs.readFile(filePath, "utf8");
+  const parsed = parseManagedProjectDocument(contents);
+  return { contents, project: managedProjectSummary(safeId, parsed, stats) };
+}
+
 function compactFailure(output) {
   const value = String(output || "Erreur inconnue").trim();
   return value.length > 12000 ? value.slice(-12000) : value;
@@ -511,6 +594,66 @@ ipcMain.handle("get-update-status", async () => ({ ...updateState }));
 ipcMain.handle("check-for-updates", async () => checkForAppUpdates());
 
 ipcMain.handle("install-update", async () => installDownloadedUpdate());
+
+ipcMain.handle("project-library:list", async () => {
+  try {
+    const root = await ensureProjectLibrary();
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    const projects = (await Promise.all(entries
+      .filter((entry) => entry.isFile() && /^[A-Za-z0-9-]{8,80}\.mbs$/i.test(entry.name))
+      .map(async (entry) => {
+        const id = entry.name.slice(0, -4);
+        try {
+          return (await readManagedProject(id)).project;
+        } catch (error) {
+          console.warn("Managed project ignored:", entry.name, error);
+          return null;
+        }
+      })))
+      .filter(Boolean)
+      .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
+    return { ok: true, projects };
+  } catch {
+    return { ok: false, projects: [], error: "Impossible de lire la bibliothèque de projets." };
+  }
+});
+
+ipcMain.handle("project-library:load", async (_event, payload) => {
+  try {
+    return { ok: true, ...(await readManagedProject(payload && payload.id)) };
+  } catch {
+    return { ok: false, error: "Impossible d'ouvrir ce projet." };
+  }
+});
+
+ipcMain.handle("project-library:save", async (_event, payload) => {
+  const contents = String(payload && payload.contents || "");
+  if (!contents.trim()) return { ok: false, error: "Le projet est vide." };
+  if (Buffer.byteLength(contents, "utf8") > MAX_PROJECT_FILE_SIZE) return { ok: false, error: "Le projet est trop volumineux." };
+  try {
+    const parsed = parseManagedProjectDocument(contents);
+    const root = await ensureProjectLibrary();
+    const id = safeManagedProjectId(payload && payload.id) || crypto.randomUUID();
+    const filePath = path.join(root, id + ".mbs");
+    await fs.writeFile(filePath, contents, "utf8");
+    const stats = await fs.stat(filePath);
+    return { ok: true, project: managedProjectSummary(id, parsed, stats) };
+  } catch {
+    return { ok: false, error: "Impossible d'enregistrer ce projet." };
+  }
+});
+
+ipcMain.handle("project-library:delete", async (_event, payload) => {
+  const id = safeManagedProjectId(payload && payload.id);
+  if (!id) return { ok: false, error: "Projet inconnu." };
+  try {
+    const root = await ensureProjectLibrary();
+    await fs.rm(path.join(root, id + ".mbs"), { force: true });
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Impossible de supprimer ce projet." };
+  }
+});
 
 ipcMain.handle("export-project", async (_event, payload) => {
   const contents = String(payload && payload.contents || "");

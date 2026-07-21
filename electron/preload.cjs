@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("minitelStudio", {
+  listProjects: () => ipcRenderer.invoke("project-library:list"),
+  loadProject: (id) => ipcRenderer.invoke("project-library:load", { id }),
+  saveProject: ({ id, contents }) => ipcRenderer.invoke("project-library:save", { id, contents }),
+  deleteProject: (id) => ipcRenderer.invoke("project-library:delete", { id }),
   exportProject: ({ suggestedName, contents }) =>
     ipcRenderer.invoke("export-project", { suggestedName, contents }),
   importProject: () => ipcRenderer.invoke("import-project"),

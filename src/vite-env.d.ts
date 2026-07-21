@@ -57,8 +57,49 @@ interface AppUpdateStatus {
   message: string;
 }
 
+interface ManagedProjectSummary {
+  id: string;
+  name: string;
+  createdAt: string;
+  modifiedAt: string;
+  columns: number;
+  rows: number;
+  colorEnabled: boolean;
+  screenCount: number;
+  blockCount: number;
+  previewText: string[];
+}
+
+interface ProjectLibraryListResult {
+  ok: boolean;
+  projects: ManagedProjectSummary[];
+  error?: string;
+}
+
+interface ManagedProjectLoadResult {
+  ok: boolean;
+  project?: ManagedProjectSummary;
+  contents?: string;
+  error?: string;
+}
+
+interface ManagedProjectSaveResult {
+  ok: boolean;
+  project?: ManagedProjectSummary;
+  error?: string;
+}
+
+interface ManagedProjectDeleteResult {
+  ok: boolean;
+  error?: string;
+}
+
 interface Window {
   minitelStudio?: {
+    listProjects: () => Promise<ProjectLibraryListResult>;
+    loadProject: (id: string) => Promise<ManagedProjectLoadResult>;
+    saveProject: (payload: { id?: string; contents: string }) => Promise<ManagedProjectSaveResult>;
+    deleteProject: (id: string) => Promise<ManagedProjectDeleteResult>;
     exportProject: (payload: { suggestedName: string; contents: string }) => Promise<ProjectFileResult>;
     importProject: () => Promise<ProjectFileResult>;
     exportArduinoProject: (payload: { projectName: string; code: string }) => Promise<ExportArduinoProjectResult>;

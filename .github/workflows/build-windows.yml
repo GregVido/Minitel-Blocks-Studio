@@ -52,6 +52,14 @@ jobs:
       - name: Build Windows installer
         run: npm run dist:win
 
+      - name: Verify updater elevation metadata
+        shell: pwsh
+        run: |
+          $metadata = Get-Content "release/latest.yml" -Raw
+          if ($metadata -notmatch "(?m)^\s+isAdminRightsRequired:\s+true\s*$") {
+            throw "The Windows release is missing the updater elevation marker."
+          }
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v5
         with:

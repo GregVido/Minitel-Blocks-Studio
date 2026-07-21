@@ -74,14 +74,14 @@
     },
     "nsis": {
       "oneClick": false,
-      "perMachine": false,
+      "perMachine": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Minitel Blocks Studio",
       "runAfterFinish": true,
       "license": "LICENSE",
-      "include": "build/installer.nsh"
+      "packElevateHelper": true
     },
     "publish": [
       {

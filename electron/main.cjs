@@ -67,11 +67,6 @@ function prepareForUpdateInstall() {
   }
   stopManagedChildren();
   releaseRuntimeSubst();
-  try {
-    app.releaseSingleInstanceLock();
-  } catch {
-    // Releasing an already released lock is harmless during shutdown.
-  }
 }
 
 function installDownloadedUpdate() {
@@ -79,16 +74,14 @@ function installDownloadedUpdate() {
   updateInstallRequested = true;
   setUpdateState({ status: "installing", message: "Redemarrage pour installer la mise a jour..." });
   prepareForUpdateInstall();
-  setTimeout(() => {
+  setImmediate(() => {
     try {
       autoUpdater.quitAndInstall(true, true);
-      const forceExitTimer = setTimeout(() => app.exit(0), 1500);
-      forceExitTimer.unref();
     } catch (error) {
       updateInstallRequested = false;
       handleUpdaterError(error);
     }
-  }, 180);
+  });
   return { ...updateState };
 }
 
@@ -126,6 +119,7 @@ function configureAutoUpdater() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.allowPrerelease = false;
+  autoUpdater.installDirectory = path.dirname(process.execPath);
 
   autoUpdater.on("checking-for-update", () => {
     setUpdateState({ status: "checking", percent: undefined, message: "Recherche d'une mise a jour..." });

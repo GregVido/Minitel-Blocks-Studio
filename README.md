@@ -104,8 +104,12 @@ L'onglet **Simulation** permet de vérifier le résultat avant l'envoi.
 - **Lancer** fait tourner le programme.
 - **Pas** avance d'une étape.
 - **Reset** remet la simulation au début.
-- **Tester A** déclenche la touche sélectionnée.
-- Une touche du clavier, comme `A`, `B`, `Entrée` ou `Retour`, peut aussi être utilisée directement.
+- **Tester** déclenche la touche choisie dans la liste.
+- Les minuscules et majuscules sont différentes : `a` ne déclenche pas un bloc réglé sur `A`.
+- Le clavier de l'ordinateur peut être utilisé directement, avec `Maj` pour une majuscule, ainsi que `Entrée`, `Retour arrière`, les flèches, `Tab` et `Suppr`.
+- Les touches `F1` à `F9` simulent respectivement Envoi, Retour, Répétition, Guide, Annulation, Sommaire, Correction, Suite et Connexion / Fin.
+
+Dans le bloc **quand la touche**, les choix sont classés par famille : lettres, chiffres, ponctuation, touches Télétel, navigation, édition, accents, symboles et combinaisons `Ctrl`.
 
 La simulation suit le format choisi et affiche les écrans au moment où elle rencontre un bloc **dessiner l'écran**.
 

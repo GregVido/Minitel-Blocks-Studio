@@ -70,6 +70,12 @@ type AppTheme = "light" | "dark";
 type SelectOption = {
   label: string;
   value: string;
+  group?: string;
+};
+
+type MinitelKeyOption = SelectOption & {
+  sequence?: readonly number[];
+  screenLabel?: string;
 };
 
 type LiteralExpr = {
@@ -417,19 +423,32 @@ function colorEnum(value: InputValue | undefined) {
   return "MinitelESP32::Color::" + textValue(value, "White");
 }
 
+function cppHexByte(value: number) {
+  return "0x" + value.toString(16).toUpperCase().padStart(2, "0");
+}
+
 function keyCondition(value: InputValue | undefined) {
-  const key = textValue(value, "A");
-  if (key === "Enter") {
-    return "key.type == MinitelESP32::KeyType::Enter";
+  const selectedKey = textValue(value, "A");
+  const option = keyOptions.find((candidate) => candidate.value === selectedKey);
+  if (option?.sequence) {
+    return "key.matches(" + option.sequence.map(cppHexByte).join(", ") + ")";
   }
-  if (key === "Backspace") {
-    return "key.type == MinitelESP32::KeyType::Backspace";
-  }
-  return "key.isCharacter() && key.character == " + cppChar(key);
+  return "key.isCharacter() && key.character == " + cppChar(selectedKey);
 }
 
 function previewKeyMatches(value: InputValue | undefined, previewKey: string) {
   return textValue(value, "A") === previewKey;
+}
+
+function minitelKeyLabel(value: string) {
+  return keyOptions.find((option) => option.value === value)?.label ?? value;
+}
+
+function minitelKeyScreenLabel(value: string) {
+  const option = keyOptions.find((candidate) => candidate.value === value);
+  if (option?.screenLabel) return option.screenLabel;
+  if (value === " ") return "ESPACE";
+  return value.length === 1 ? value : option?.label.toUpperCase() ?? value.toUpperCase();
 }
 
 const colorOptions: SelectOption[] = [
@@ -450,17 +469,116 @@ const textSizeOptions: SelectOption[] = [
   { label: "grand", value: "DoubleSize" },
 ];
 
-const keyOptions: SelectOption[] = [
-  { label: "A", value: "A" },
-  { label: "B", value: "B" },
-  { label: "C", value: "C" },
-  { label: "0", value: "0" },
-  { label: "1", value: "1" },
-  { label: "#", value: "#" },
-  { label: "*", value: "*" },
-  { label: "Entrée", value: "Enter" },
-  { label: "Retour", value: "Backspace" },
+const lowercaseKeyOptions: MinitelKeyOption[] = Array.from("abcdefghijklmnopqrstuvwxyz", (letter) => ({
+  label: letter + " minuscule",
+  value: letter,
+  group: "Lettres minuscules",
+}));
+
+const uppercaseKeyOptions: MinitelKeyOption[] = Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ", (letter) => ({
+  label: letter + " majuscule",
+  value: letter,
+  group: "Lettres majuscules",
+}));
+
+const digitKeyOptions: MinitelKeyOption[] = Array.from("0123456789", (digit) => ({
+  label: digit,
+  value: digit,
+  group: "Chiffres",
+}));
+
+const symbolKeyOptions: MinitelKeyOption[] = Array.from({ length: 95 }, (_, index) => String.fromCharCode(0x20 + index))
+  .filter((character) => !/[A-Za-z0-9]/.test(character))
+  .map((character) => ({
+    label: character === " " ? "Espace" : character,
+    value: character,
+    group: "Symboles et ponctuation",
+    screenLabel: character === " " ? "ESPACE" : character,
+  }));
+
+const controlKeyOptions: MinitelKeyOption[] = Array.from({ length: 26 }, (_, index) => {
+  const letter = String.fromCharCode(65 + index);
+  return {
+    label: "Ctrl + " + letter,
+    value: "control:" + letter,
+    group: "Combinaisons Ctrl",
+    sequence: [index + 1],
+    screenLabel: "CTRL " + letter,
+  };
+});
+
+const keyOptions: MinitelKeyOption[] = [
+  ...lowercaseKeyOptions,
+  ...uppercaseKeyOptions,
+  ...digitKeyOptions,
+  ...symbolKeyOptions,
+  { label: "Envoi", value: "minitel:send", group: "Touches Télétel", sequence: [0x13, 0x41], screenLabel: "ENVOI" },
+  { label: "Retour", value: "minitel:return", group: "Touches Télétel", sequence: [0x13, 0x42], screenLabel: "RETOUR" },
+  { label: "Répétition", value: "minitel:repeat", group: "Touches Télétel", sequence: [0x13, 0x43], screenLabel: "REPETITION" },
+  { label: "Guide", value: "minitel:guide", group: "Touches Télétel", sequence: [0x13, 0x44], screenLabel: "GUIDE" },
+  { label: "Annulation", value: "minitel:cancel", group: "Touches Télétel", sequence: [0x13, 0x45], screenLabel: "ANNULATION" },
+  { label: "Sommaire", value: "minitel:summary", group: "Touches Télétel", sequence: [0x13, 0x46], screenLabel: "SOMMAIRE" },
+  { label: "Correction", value: "minitel:correction", group: "Touches Télétel", sequence: [0x13, 0x47], screenLabel: "CORRECTION" },
+  { label: "Suite", value: "minitel:next", group: "Touches Télétel", sequence: [0x13, 0x48], screenLabel: "SUITE" },
+  { label: "Connexion / Fin", value: "minitel:connection", group: "Touches Télétel", sequence: [0x13, 0x49], screenLabel: "CONNEXION" },
+  { label: "Entrée", value: "Enter", group: "Navigation et édition", sequence: [0x0D], screenLabel: "ENTREE" },
+  { label: "Retour arrière", value: "Backspace", group: "Navigation et édition", sequence: [0x08], screenLabel: "RETOUR ARRIERE" },
+  { label: "Tabulation", value: "key:tab", group: "Navigation et édition", sequence: [0x09], screenLabel: "TABULATION" },
+  { label: "Saut de ligne", value: "key:line-feed", group: "Navigation et édition", sequence: [0x0A], screenLabel: "SAUT DE LIGNE" },
+  { label: "Tabulation verticale", value: "key:vertical-tab", group: "Navigation et édition", sequence: [0x0B], screenLabel: "TAB VERTICALE" },
+  { label: "Saut de page", value: "key:form-feed", group: "Navigation et édition", sequence: [0x0C], screenLabel: "SAUT DE PAGE" },
+  { label: "Échap", value: "key:escape", group: "Navigation et édition", sequence: [0x1B], screenLabel: "ECHAP" },
+  { label: "Supprimer (DEL)", value: "key:delete", group: "Navigation et édition", sequence: [0x7F], screenLabel: "SUPPRIMER" },
+  { label: "Flèche haut", value: "cursor:up", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x41], screenLabel: "HAUT" },
+  { label: "Flèche bas", value: "cursor:down", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x42], screenLabel: "BAS" },
+  { label: "Flèche droite", value: "cursor:right", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x43], screenLabel: "DROITE" },
+  { label: "Flèche gauche", value: "cursor:left", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x44], screenLabel: "GAUCHE" },
+  { label: "Accueil", value: "edit:home", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x48], screenLabel: "ACCUEIL" },
+  { label: "Supprimer une ligne", value: "edit:delete-line", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x4D], screenLabel: "SUPPRIMER LIGNE" },
+  { label: "Insérer une ligne", value: "edit:insert-line", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x4C], screenLabel: "INSERER LIGNE" },
+  { label: "Supprimer un caractère", value: "edit:delete-character", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x50], screenLabel: "SUPPRIMER CAR." },
+  { label: "Commencer l'insertion", value: "edit:insert-start", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x34, 0x68], screenLabel: "DEBUT INSERTION" },
+  { label: "Terminer l'insertion", value: "edit:insert-end", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x34, 0x6C], screenLabel: "FIN INSERTION" },
+  { label: "Effacer la page", value: "edit:erase-page", group: "Navigation et édition", sequence: [0x1B, 0x5B, 0x32, 0x4A], screenLabel: "EFFACER PAGE" },
+  { label: "Livre sterling £", value: "special:pound", group: "Accents et symboles Minitel", sequence: [0x19, 0x23], screenLabel: "LIVRE" },
+  { label: "Section §", value: "special:section", group: "Accents et symboles Minitel", sequence: [0x19, 0x27], screenLabel: "SECTION" },
+  { label: "Symbole flèche gauche", value: "special:left-arrow", group: "Accents et symboles Minitel", sequence: [0x19, 0x2C], screenLabel: "FLECHE GAUCHE" },
+  { label: "Symbole flèche droite", value: "special:right-arrow", group: "Accents et symboles Minitel", sequence: [0x19, 0x2E], screenLabel: "FLECHE DROITE" },
+  { label: "Symbole flèche bas", value: "special:down-arrow", group: "Accents et symboles Minitel", sequence: [0x19, 0x2F], screenLabel: "FLECHE BAS" },
+  { label: "Degré °", value: "special:degree", group: "Accents et symboles Minitel", sequence: [0x19, 0x30], screenLabel: "DEGRE" },
+  { label: "Plus ou moins ±", value: "special:plus-minus", group: "Accents et symboles Minitel", sequence: [0x19, 0x31], screenLabel: "PLUS OU MOINS" },
+  { label: "Division ÷", value: "special:division", group: "Accents et symboles Minitel", sequence: [0x19, 0x38], screenLabel: "DIVISION" },
+  { label: "Accent grave (TS + Suite)", value: "accent:grave", group: "Accents et symboles Minitel", sequence: [0x19, 0x41], screenLabel: "ACCENT GRAVE" },
+  { label: "Accent aigu (TS + Retour)", value: "accent:acute", group: "Accents et symboles Minitel", sequence: [0x19, 0x42], screenLabel: "ACCENT AIGU" },
+  { label: "Accent circonflexe (TS + Sommaire)", value: "accent:circumflex", group: "Accents et symboles Minitel", sequence: [0x19, 0x43], screenLabel: "CIRCONFLEXE" },
+  { label: "Tréma (TS + Guide)", value: "accent:diaeresis", group: "Accents et symboles Minitel", sequence: [0x19, 0x48], screenLabel: "TREMA" },
+  { label: "C cédille ç", value: "special:cedilla", group: "Accents et symboles Minitel", sequence: [0x19, 0x4B, 0x63], screenLabel: "C CEDILLE" },
+  { label: "Ligature Œ", value: "special:oe-upper", group: "Accents et symboles Minitel", sequence: [0x19, 0x6A], screenLabel: "OE MAJUSCULE" },
+  { label: "Ligature œ", value: "special:oe-lower", group: "Accents et symboles Minitel", sequence: [0x19, 0x7A], screenLabel: "OE MINUSCULE" },
+  { label: "Eszett ß", value: "special:eszett", group: "Accents et symboles Minitel", sequence: [0x19, 0x7B], screenLabel: "ESZETT" },
+  ...controlKeyOptions,
 ];
+
+const browserMinitelKeyValues: Record<string, string> = {
+  Enter: "Enter",
+  Backspace: "Backspace",
+  Delete: "key:delete",
+  Tab: "key:tab",
+  ArrowUp: "cursor:up",
+  ArrowDown: "cursor:down",
+  ArrowRight: "cursor:right",
+  ArrowLeft: "cursor:left",
+  Home: "edit:home",
+  F1: "minitel:send",
+  F2: "minitel:return",
+  F3: "minitel:repeat",
+  F4: "minitel:guide",
+  F5: "minitel:cancel",
+  F6: "minitel:summary",
+  F7: "minitel:correction",
+  F8: "minitel:next",
+  F9: "minitel:connection",
+};
 
 const baudOptions: SelectOption[] = [
   { label: "300 bauds", value: "300" },
@@ -1787,7 +1905,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       }
       case "show-key":
         setCursor(state, exprPreviewNumber(values.column, state.variables, 2), exprPreviewNumber(values.row, state.variables, 22));
-        writePreviewText(state, previewKey === "Enter" ? "ENTREE" : previewKey === "Backspace" ? "RETOUR" : previewKey);
+        writePreviewText(state, minitelKeyScreenLabel(previewKey));
         break;
       case "read-line":
         state.messages.push("Lecture clavier simulée");
@@ -1869,7 +1987,7 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
   }
 
   simulatedKeys.slice(-12).forEach((key) => {
-    state.messages.push("Touche " + (key === "Enter" ? "Entrée" : key === "Backspace" ? "Retour" : key));
+    state.messages.push("Touche " + minitelKeyLabel(key));
     keyStacks
       .filter((stack) => stack.event.definitionId === "event-key-any" || previewKeyMatches(stack.event.values.key, key))
       .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens));
@@ -2257,6 +2375,28 @@ function BooleanExpressionEditor({
   );
 }
 
+function SelectOptionList({ options }: { options: SelectOption[] }) {
+  const ungroupedOptions = options.filter((option) => !option.group);
+  const groups = options.reduce<Array<{ label: string; options: SelectOption[] }>>((result, option) => {
+    if (!option.group) return result;
+    const existingGroup = result.find((group) => group.label === option.group);
+    if (existingGroup) existingGroup.options.push(option);
+    else result.push({ label: option.group, options: [option] });
+    return result;
+  }, []);
+
+  return (
+    <>
+      {ungroupedOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+      {groups.map((group) => (
+        <optgroup label={group.label} key={group.label}>
+          {group.options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+        </optgroup>
+      ))}
+    </>
+  );
+}
+
 function InputControl({ input, value, variables, screens = [], expressionOwner, onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; expressionOwner?: ExpressionDropOwner; onChange: (value: InputValue) => void }) {
   const actualValue = value ?? input.defaultValue;
   const stopDrag = (event: MouseEvent) => event.stopPropagation();
@@ -2346,9 +2486,7 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
     <label className="block-control" onMouseDown={stopDrag}>
       <span>{input.label}</span>
       <select value={String(actualValue)} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => (
-          <option value={option.value} key={option.value}>{option.label}</option>
-        ))}
+        <SelectOptionList options={options} />
       </select>
     </label>
   );
@@ -3214,13 +3352,12 @@ function App() {
   }
 
   function triggerSimulatedKey(key: string) {
-    const normalizedKey = key.length === 1 ? key.toUpperCase() : key;
-    if (!keyOptions.some((option) => option.value === normalizedKey)) return;
+    if (!keyOptions.some((option) => option.value === key)) return;
     setRightTab("preview");
-    setPreviewKey(normalizedKey);
-    setSimulatedKeys((current) => [...current.slice(-11), normalizedKey]);
+    setPreviewKey(key);
+    setSimulatedKeys((current) => [...current.slice(-11), key]);
     setSimTick((current) => current + 1);
-    flashNotice("Touche " + (normalizedKey === "Enter" ? "Entrée" : normalizedKey === "Backspace" ? "Retour" : normalizedKey) + " simulée");
+    flashNotice("Touche " + minitelKeyLabel(key) + " simulée");
   }
 
   function resetSimulation() {
@@ -3271,9 +3408,22 @@ function App() {
       const tagName = target?.tagName;
       const isTyping = target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
       if (event.key === "Escape") {
-        if (pendingPointerDragRef.current) cancelPointerDrag();
-        if (examplesOpen) setExamplesOpen(false);
-        if (settingsOpen) setSettingsOpen(false);
+        if (pendingPointerDragRef.current) {
+          cancelPointerDrag();
+          return;
+        }
+        if (examplesOpen) {
+          setExamplesOpen(false);
+          return;
+        }
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          return;
+        }
+        if (appView === "studio" && rightTab === "preview") {
+          event.preventDefault();
+          triggerSimulatedKey("key:escape");
+        }
         return;
       }
       if (event.ctrlKey || event.metaKey) {
@@ -3304,7 +3454,7 @@ function App() {
 
       if (isTyping) return;
 
-      const simulatedKey = event.key === "Enter" || event.key === "Backspace" ? event.key : event.key.length === 1 ? event.key.toUpperCase() : "";
+      const simulatedKey = browserMinitelKeyValues[event.key] ?? (event.key.length === 1 ? event.key : "");
       if (appView === "studio" && rightTab === "preview" && keyOptions.some((option) => option.value === simulatedKey)) {
         event.preventDefault();
         triggerSimulatedKey(simulatedKey);
@@ -4166,13 +4316,13 @@ function App() {
             <div className="preview-panel">
               <div className="preview-toolbar">
                 <div className="section-title compact"><Monitor size={17} /><span>{screenConfig.name}</span></div>
-                <label className="preview-key"><Keyboard size={15} /><select value={previewKey} onChange={(event) => setPreviewKey(event.target.value)}>{keyOptions.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>
+                <label className="preview-key"><Keyboard size={15} /><select value={previewKey} onChange={(event) => setPreviewKey(event.target.value)}><SelectOptionList options={keyOptions} /></select></label>
               </div>
               <div className="simulation-panel">
                 <button type="button" className={"sim-button " + (simRunning ? "active" : "")} onClick={() => setSimRunning((current) => !current)} title={simRunning ? "Mettre en pause" : "Lancer la simulation"}>{simRunning ? <Pause size={16} /> : <Play size={16} />}<span>{simRunning ? "Pause" : "Lancer"}</span></button>
                 <button type="button" className="sim-button" onClick={() => setSimTick((current) => current + 1)} title="Avancer d'un tour"><StepForward size={16} /><span>Pas</span></button>
                 <button type="button" className="sim-button" onClick={resetSimulation} title="Remettre la simulation à zéro"><RotateCcw size={16} /><span>Reset</span></button>
-                <button type="button" className="sim-button key-test" onClick={() => triggerSimulatedKey(previewKey)} title="Tester la touche sélectionnée"><Keyboard size={16} /><span>Tester {previewKey === "Enter" ? "Entrée" : previewKey === "Backspace" ? "Retour" : previewKey}</span></button>
+                <button type="button" className="sim-button key-test" onClick={() => triggerSimulatedKey(previewKey)} title="Tester la touche sélectionnée"><Keyboard size={16} /><span>Tester {minitelKeyLabel(previewKey)}</span></button>
                 <label className="speed-control"><span>{simSpeed} ms</span><input type="range" min="150" max="1200" step="50" value={simSpeed} onChange={(event) => setSimSpeed(Number(event.target.value))} /></label>
                 <div className="sim-counter">Tour {Math.max(1, Math.min(12, simTick + 1))}</div>
               </div>

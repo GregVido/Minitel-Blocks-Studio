@@ -39,15 +39,34 @@ class MinitelESP32 : public Print {
     DeleteKey,
     Escape,
     Control,
+    Function,
+    Sequence,
   };
 
   struct Key {
     KeyType type = KeyType::None;
     uint8_t code = 0;
     char character = '\0';
+    uint8_t bytes[4] = {0, 0, 0, 0};
+    uint8_t length = 0;
 
     bool available() const { return type != KeyType::None; }
     bool isCharacter() const { return type == KeyType::Character; }
+    bool matches(uint8_t first) const {
+      return length == 1 && bytes[0] == first;
+    }
+    bool matches(uint8_t first, uint8_t second) const {
+      return length == 2 && bytes[0] == first && bytes[1] == second;
+    }
+    bool matches(uint8_t first, uint8_t second, uint8_t third) const {
+      return length == 3 && bytes[0] == first && bytes[1] == second &&
+             bytes[2] == third;
+    }
+    bool matches(uint8_t first, uint8_t second, uint8_t third,
+                 uint8_t fourth) const {
+      return length == 4 && bytes[0] == first && bytes[1] == second &&
+             bytes[2] == third && bytes[3] == fourth;
+    }
   };
 
   enum MosaicSextant : uint8_t {
@@ -143,7 +162,13 @@ class MinitelESP32 : public Print {
   int8_t _txPin;
   uint32_t _baud;
   uint32_t _serialConfig;
+  uint8_t _keySequence[4] = {0, 0, 0, 0};
+  uint8_t _keySequenceLength = 0;
+  uint32_t _keySequenceStartedAt = 0;
 
+  void resetKeySequence();
+  bool keySequenceComplete() const;
+  Key finishKeySequence();
   bool pingPong(uint8_t pingByte, const uint8_t *pongBytes,
                 size_t pongByteCount, uint16_t timeoutMs, uint8_t attempts);
   bool pingTerminalStatus(uint16_t timeoutMs, uint8_t attempts);

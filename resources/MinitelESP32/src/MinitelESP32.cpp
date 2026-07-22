@@ -11,8 +11,11 @@ constexpr uint8_t kTextMode = 0x0F;
 constexpr uint8_t kCursorOn = 0x11;
 constexpr uint8_t kCursorOff = 0x14;
 constexpr uint8_t kClearToEndOfLine = 0x18;
+constexpr uint8_t kSeparator = 0x13;
+constexpr uint8_t kSupplementarySet = 0x19;
 constexpr uint8_t kEscape = 0x1B;
 constexpr uint8_t kHome = 0x1E;
+constexpr uint32_t kKeySequenceTimeoutMs = 120;
 constexpr uint8_t kMoveTo = 0x1F;
 constexpr uint8_t kProtocolOne = 0x39;
 constexpr uint8_t kProtocolTwo = 0x3A;
@@ -231,6 +234,7 @@ void MinitelESP32::drainInput() {
   while (_serial.available() > 0) {
     _serial.read();
   }
+  resetKeySequence();
 }
 
 bool MinitelESP32::readByte(uint8_t &value) {
@@ -243,22 +247,79 @@ bool MinitelESP32::readByte(uint8_t &value) {
   return true;
 }
 
-MinitelESP32::Key MinitelESP32::readKey() {
+void MinitelESP32::resetKeySequence() {
+  for (size_t i = 0; i < sizeof(_keySequence); ++i) {
+    _keySequence[i] = 0;
+  }
+  _keySequenceLength = 0;
+  _keySequenceStartedAt = 0;
+}
+
+bool MinitelESP32::keySequenceComplete() const {
+  if (_keySequenceLength == 0) {
+    return false;
+  }
+
+  const uint8_t first = _keySequence[0];
+  if (first == kSeparator) {
+    return _keySequenceLength >= 2;
+  }
+
+  if (first == kSupplementarySet) {
+    if (_keySequenceLength < 2) {
+      return false;
+    }
+    return _keySequence[1] == 0x4B ? _keySequenceLength >= 3 : true;
+  }
+
+  if (first == kEscape) {
+    if (_keySequenceLength < 2) {
+      return false;
+    }
+
+    const uint8_t second = _keySequence[1];
+    if (second == 0x5B) {
+      if (_keySequenceLength < 3) {
+        return false;
+      }
+      const uint8_t finalByte = _keySequence[_keySequenceLength - 1];
+      return finalByte >= 0x40 && finalByte <= 0x7E;
+    }
+
+    if (second == 0x4F) {
+      return _keySequenceLength >= 3;
+    }
+  }
+
+  return true;
+}
+
+MinitelESP32::Key MinitelESP32::finishKeySequence() {
   Key key;
-  uint8_t value = 0;
-  if (!readByte(value)) {
+  if (_keySequenceLength == 0) {
     return key;
   }
 
-  key.code = value;
+  key.length = _keySequenceLength;
+  for (uint8_t i = 0; i < key.length; ++i) {
+    key.bytes[i] = _keySequence[i];
+  }
+  key.code = key.bytes[0];
 
-  if (value >= 0x20 && value <= 0x7E) {
+  if (key.length > 1) {
+    key.type = key.code == kSeparator ? KeyType::Function : KeyType::Sequence;
+    resetKeySequence();
+    return key;
+  }
+
+  if (key.code >= 0x20 && key.code <= 0x7E) {
     key.type = KeyType::Character;
-    key.character = static_cast<char>(value);
+    key.character = static_cast<char>(key.code);
+    resetKeySequence();
     return key;
   }
 
-  switch (value) {
+  switch (key.code) {
     case '\r':
     case kLineFeed:
       key.type = KeyType::Enter;
@@ -277,7 +338,35 @@ MinitelESP32::Key MinitelESP32::readKey() {
       break;
   }
 
+  resetKeySequence();
   return key;
+}
+
+MinitelESP32::Key MinitelESP32::readKey() {
+  if (_keySequenceLength > 0 &&
+      millis() - _keySequenceStartedAt >= kKeySequenceTimeoutMs) {
+    return finishKeySequence();
+  }
+
+  uint8_t value = 0;
+  while (readByte(value)) {
+    if (_keySequenceLength == 0) {
+      _keySequenceStartedAt = millis();
+    }
+
+    _keySequence[_keySequenceLength++] = value;
+    if (keySequenceComplete() ||
+        _keySequenceLength >= sizeof(_keySequence)) {
+      return finishKeySequence();
+    }
+  }
+
+  if (_keySequenceLength > 0 &&
+      millis() - _keySequenceStartedAt >= kKeySequenceTimeoutMs) {
+    return finishKeySequence();
+  }
+
+  return Key();
 }
 
 size_t MinitelESP32::readLine(char *buffer, size_t length,

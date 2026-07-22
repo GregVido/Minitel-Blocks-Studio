@@ -625,6 +625,38 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.program-block:has(.expression-binary) > .block-face {
+  position: relative;
+  align-items: flex-start;
+}
+
+.program-block:has(.expression-binary) > .block-face > .program-block-main {
+  width: calc(100% - 26px);
+  flex: 1 1 calc(100% - 26px);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.program-block:has(.expression-binary) > .block-face > .program-block-main > .block-title {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  padding-right: 138px;
+}
+
+.program-block:has(.expression-binary) > .block-face > .program-block-main > .block-inputs {
+  width: 100%;
+  flex: 0 0 auto;
+}
+
+.program-block:has(.expression-binary) > .block-face > .block-actions {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 0;
+}
+
 .block-control,
 .block-toggle {
   min-height: 29px;
@@ -656,13 +688,14 @@ textarea:focus-visible {
 
 .expression-pill {
   max-width: 100%;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: visible;
 }
 
 .binary-expression-tree,
 .number-expression-node {
-  max-width: 100%;
-  flex-wrap: wrap;
+  max-width: none;
+  flex-wrap: nowrap;
 }
 
 .block-actions {

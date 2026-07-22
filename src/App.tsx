@@ -336,6 +336,15 @@ const binaryExpr = (op: BinaryExpr["op"], left: Expr, right: Expr): Expr => ({ k
 const addExpr = (left: Expr, right: Expr): Expr => binaryExpr("+", left, right);
 const compareExpr = (left: Expr, op: CompareExpr["op"], right: Expr): Expr => ({ kind: "compare", valueType: "boolean", op, left, right });
 
+function expressionOperatorGlyph(op: BinaryExpr["op"] | CompareExpr["op"]) {
+  if (op === "-") return "\u2212";
+  if (op === "*") return "\u00d7";
+  if (op === "/") return "\u00f7";
+  if (op === "==") return "=";
+  if (op === "!=") return "\u2260";
+  return op;
+}
+
 function isExpr(value: InputValue | undefined): value is Expr {
   return Boolean(value && typeof value === "object" && "kind" in value);
 }
@@ -2050,6 +2059,55 @@ function duplicateBlockInList(blocks: ProgramBlock[], blockId: string): { blocks
   return { blocks: next, done, duplicateIds };
 }
 
+type NumberExpressionMode = "literal" | "variable" | "binary";
+
+function ExpressionKindSwitch({
+  mode,
+  onChange,
+}: {
+  mode: NumberExpressionMode;
+  onChange: (mode: NumberExpressionMode) => void;
+}) {
+  const labels: Record<NumberExpressionMode, string> = {
+    literal: "Nombre",
+    variable: "Variable",
+    binary: "Calcul",
+  };
+
+  return (
+    <span className={"expression-kind-switch is-" + mode} title={"Changer le type : " + labels[mode]}>
+      <ChevronDown size={11} aria-hidden="true" />
+      <select className="expression-kind-select" value={mode} aria-label="Type de valeur" onChange={(event) => onChange(event.target.value as NumberExpressionMode)}>
+        <option value="literal">Nombre</option>
+        <option value="variable">Variable</option>
+        <option value="binary">Calcul</option>
+      </select>
+    </span>
+  );
+}
+
+function ExpressionOperatorSwitch({
+  value,
+  label,
+  options,
+  onChange,
+}: {
+  value: string;
+  label: string;
+  options: Array<{ value: string; label: string }>;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <span className="expression-operator-switch" title={label}>
+      <strong className="expression-operator-symbol" aria-hidden="true">{expressionOperatorGlyph(value as BinaryExpr["op"] | CompareExpr["op"])}</strong>
+      <ChevronDown size={10} aria-hidden="true" />
+      <select value={value} aria-label={label} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
+      </select>
+    </span>
+  );
+}
+
 function NumberExpressionNode({
   value,
   variables,
@@ -2062,11 +2120,21 @@ function NumberExpressionNode({
   dropLocation?: ExpressionDropLocation;
 }) {
   const expr = numberExpression(value);
-  const mode = expr.kind === "binary" ? "binary" : expr.kind === "variable" ? "variable" : "literal";
+  const mode: NumberExpressionMode = expr.kind === "binary" ? "binary" : expr.kind === "variable" ? "variable" : "literal";
   const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
   const childLocation = (side: ExpressionPathPart): ExpressionDropLocation | undefined => (
     dropLocation ? { ...dropLocation, path: [...dropLocation.path, side], accepts: "number" } : undefined
   );
+
+  const changeMode = (nextMode: NumberExpressionMode) => {
+    if (nextMode === "variable") {
+      onChange(variableExpr(variables[0]?.name ?? "maVariable"));
+    } else if (nextMode === "binary") {
+      onChange(binaryExpr("+", cloneValue(expr), num(0)));
+    } else {
+      onChange(num(expr.kind === "literal" && expr.valueType === "number" ? Number(expr.value) || 0 : 0));
+    }
+  };
 
   return (
     <span
@@ -2075,56 +2143,47 @@ function NumberExpressionNode({
       data-expression-drop-key={dropKey}
       data-expression-accepts={dropLocation?.accepts}
     >
-      <select
-        className="expression-kind-select"
-        value={mode}
-        aria-label="Type de valeur"
-        title="Type de valeur"
-        onChange={(event) => {
-          if (event.target.value === "variable") {
-            onChange(variableExpr(variables[0]?.name ?? "maVariable"));
-          } else if (event.target.value === "binary") {
-            onChange(binaryExpr("+", cloneValue(expr), num(0)));
-          } else {
-            onChange(num(expr.kind === "literal" && expr.valueType === "number" ? Number(expr.value) || 0 : 0));
-          }
-        }}
-      >
-        <option value="literal">nombre</option>
-        <option value="variable">variable</option>
-        <option value="binary">calcul</option>
-      </select>
-
-      {mode === "variable" && expr.kind === "variable" ? (
-        <select className="expression-variable-select" value={expr.name} aria-label="Variable" onChange={(event) => onChange({ ...expr, name: event.target.value })}>
-          {variables.map((variable) => (
-            <option value={variable.name} key={variable.id}>{variable.name}</option>
-          ))}
-        </select>
-      ) : null}
-
-      {mode === "literal" ? (
-        <input
-          type="number"
-          aria-label="Nombre"
-          value={String(expr.kind === "literal" && expr.valueType === "number" ? expr.value : 0)}
-          onChange={(event) => onChange(num(Number(event.target.value)))}
-        />
-      ) : null}
-
       {mode === "binary" && expr.kind === "binary" ? (
-        <span className="binary-expression-tree">
-          <NumberExpressionNode value={expr.left} variables={variables} dropLocation={childLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
-          <select className="operator-select" value={expr.op} aria-label="Operation" title="Operation" onChange={(event) => onChange({ ...expr, op: event.target.value as BinaryExpr["op"] })}>
-            <option value="+">+</option>
-            <option value="-">−</option>
-            <option value="*">×</option>
-            <option value="/">÷</option>
-            <option value="%">%</option>
-          </select>
-          <NumberExpressionNode value={expr.right} variables={variables} dropLocation={childLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
-        </span>
-      ) : null}
+        <>
+          <span className="binary-expression-tree">
+            <NumberExpressionNode value={expr.left} variables={variables} dropLocation={childLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+            <ExpressionOperatorSwitch
+              value={expr.op}
+              label="Choisir l'op\u00e9ration"
+              options={[
+                { value: "+", label: "+" },
+                { value: "-", label: "\u2212" },
+                { value: "*", label: "\u00d7" },
+                { value: "/", label: "\u00f7" },
+                { value: "%", label: "%" },
+              ]}
+              onChange={(next) => onChange({ ...expr, op: next as BinaryExpr["op"] })}
+            />
+            <NumberExpressionNode value={expr.right} variables={variables} dropLocation={childLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+          </span>
+          <ExpressionKindSwitch mode={mode} onChange={changeMode} />
+        </>
+      ) : (
+        <>
+          {mode === "variable" && expr.kind === "variable" ? (
+            <select className="expression-variable-select" value={expr.name} aria-label="Variable" onChange={(event) => onChange({ ...expr, name: event.target.value })}>
+              {variables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+            </select>
+          ) : null}
+
+          {mode === "literal" ? (
+            <input
+              type="number"
+              inputMode="decimal"
+              aria-label="Nombre"
+              value={String(expr.kind === "literal" && expr.valueType === "number" ? expr.value : 0)}
+              onChange={(event) => onChange(num(Number(event.target.value)))}
+            />
+          ) : null}
+
+          <ExpressionKindSwitch mode={mode} onChange={changeMode} />
+        </>
+      )}
     </span>
   );
 }
@@ -2180,14 +2239,19 @@ function BooleanExpressionEditor({
       data-expression-accepts={conditionLocation?.accepts}
     >
       <NumberExpressionNode value={expr.left} variables={variables} dropLocation={numberLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
-      <select className="operator-select" value={expr.op} aria-label="Comparaison" onChange={(event) => onChange({ ...expr, op: event.target.value as CompareExpr["op"] })}>
-        <option value="==">=</option>
-        <option value="!=">≠</option>
-        <option value="<">&lt;</option>
-        <option value="<=">≤</option>
-        <option value=">">&gt;</option>
-        <option value=">=">≥</option>
-      </select>
+      <ExpressionOperatorSwitch
+        value={expr.op}
+        label="Choisir la comparaison"
+        options={[
+          { value: "==", label: "=" },
+          { value: "!=", label: "\u2260" },
+          { value: "<", label: "<" },
+          { value: "<=", label: "\u2264" },
+          { value: ">", label: ">" },
+          { value: ">=", label: "\u2265" },
+        ]}
+        onChange={(next) => onChange({ ...expr, op: next as CompareExpr["op"] })}
+      />
       <NumberExpressionNode value={expr.right} variables={variables} dropLocation={numberLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
     </span>
   );
@@ -2290,6 +2354,16 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
   );
 }
 
+function PaletteExpressionPreview({ expression }: { expression: BinaryExpr | CompareExpr }) {
+  return (
+    <span className={"palette-expression-preview " + (expression.kind === "compare" ? "is-condition" : "is-binary")} aria-hidden="true">
+      <span className="palette-expression-operand">{expressionLabel(expression.left)}</span>
+      <strong className="palette-expression-symbol">{expressionOperatorGlyph(expression.op)}</strong>
+      <span className="palette-expression-operand">{expressionLabel(expression.right)}</span>
+    </span>
+  );
+}
+
 function PaletteBlock({
   definition,
   isDragging,
@@ -2309,6 +2383,7 @@ function PaletteBlock({
 }) {
   const style = { "--block-color": definition.color } as BlockStyle;
   const shape = definition.kind === "event" ? "event-hat" : definition.kind === "control" ? "palette-c-block" : definition.kind === "value" ? "value-block" : "brick";
+  const expressionPreview = definition.output?.kind === "binary" || definition.output?.kind === "compare" ? definition.output : null;
   return (
     <button
       className={"palette-block " + shape + (isDragging ? " dragging" : "")}
@@ -2324,8 +2399,9 @@ function PaletteBlock({
       onDragEnd={onDragEnd}
       onClick={() => onQuickAdd(definition)}
       title={definition.help}
+      aria-label={definition.title}
     >
-      <span>{definition.title}</span>
+      {expressionPreview ? <PaletteExpressionPreview expression={expressionPreview} /> : <span>{definition.title}</span>}
       {definition.inputs?.slice(0, 2).map((input) => (
         <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : expressionLabel(input.defaultValue)}</span>
       ))}

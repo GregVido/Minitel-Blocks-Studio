@@ -1006,45 +1006,45 @@ button {
 
 .expression-control {
   border-radius: 18px;
-  align-items: flex-start;
+  align-items: center;
   padding: 4px 6px 4px 9px;
 }
 
 .expression-control > span:first-child {
-  padding-top: 5px;
+  align-self: center;
+  padding-top: 0;
 }
 
 .expression-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   max-width: 100%;
-  min-height: 29px;
+  min-height: 32px;
+  overflow: visible;
   color: #172033;
 }
 
 .number-expression {
   padding: 0;
-  border-radius: 7px;
+  border-radius: 999px;
   background: transparent;
   box-shadow: none;
-  overflow: visible;
 }
 
 .number-expression-node {
   position: relative;
+  flex: 0 0 auto;
   min-width: 0;
-  max-width: 100%;
-  min-height: 29px;
+  max-width: none;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 3px;
-  border: 1px solid rgba(28, 48, 74, 0.16);
+  gap: 3px;
+  padding: 3px 4px;
+  border: 1px solid rgba(28, 48, 74, 0.2);
   border-radius: 999px;
-  background: #ffffff;
   color: #172033;
-  box-shadow: 0 1px 2px rgba(23, 32, 51, 0.08);
   transform-origin: center;
   transition:
     transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -1054,81 +1054,219 @@ button {
     outline-color 150ms ease;
 }
 
+.number-expression-node.expression-literal {
+  padding-left: 7px;
+  background: #ffffff;
+  box-shadow: inset 0 -1px 0 rgba(24, 39, 65, 0.08), 0 1px 2px rgba(23, 32, 51, 0.1);
+}
+
+.number-expression-node.expression-variable {
+  border-color: #d97b00;
+  background: #ff9f1c;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 rgba(132, 68, 0, 0.22), 0 2px 4px rgba(101, 55, 0, 0.15);
+}
+
 .number-expression-node.expression-binary {
-  flex-wrap: wrap;
-  border-color: rgba(45, 145, 76, 0.34);
-  border-radius: 7px;
-  background: #eaf8ee;
-  box-shadow: inset 0 0 0 1px rgba(66, 173, 98, 0.08), 0 1px 3px rgba(23, 80, 42, 0.1);
+  gap: 4px;
+  padding: 4px 5px;
+  border-color: #218746;
+  background: #42ad62;
+  color: #ffffff;
+  box-shadow: inset 0 -3px 0 rgba(12, 92, 42, 0.24), 0 2px 5px rgba(17, 91, 45, 0.2);
+  animation: expressionBuildIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.number-expression-node.expression-binary .number-expression-node.expression-binary {
+  border-color: #19763b;
+  background: #329c54;
 }
 
 .binary-expression-tree {
   min-width: 0;
-  max-width: 100%;
+  max-width: none;
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
 }
 
-.number-expression-node .number-expression-node {
-  background: rgba(255, 255, 255, 0.94);
-}
-
 .condition-expression {
   position: relative;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  gap: 4px;
   border-radius: 12px;
   clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%);
-  padding: 4px 13px;
-  background: #f7c948;
-  box-shadow: inset 0 0 0 1px rgba(111, 77, 0, 0.14);
+  padding: 5px 14px;
+  background: #35a85b;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 rgba(12, 92, 42, 0.22), 0 2px 5px rgba(17, 91, 45, 0.16);
   transform-origin: center;
   transition: transform 150ms cubic-bezier(0.2, 0.8, 0.2, 1), filter 150ms ease, box-shadow 150ms ease;
 }
 
-.expression-pill select,
-.expression-pill input,
-.number-expression-node select,
-.number-expression-node input,
+.number-expression-node input[type="number"] {
+  width: 46px;
+  height: 25px;
+  min-width: 0;
+  padding: 0 2px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #172033;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+  appearance: textfield;
+}
+
+.number-expression-node input[type="number"]::-webkit-inner-spin-button,
+.number-expression-node input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.expression-variable-select,
 .variable-control select {
   height: 25px;
   min-width: 0;
   border: 0;
   border-radius: 5px;
-  background: #edf3f7;
-  color: #172033;
-  padding: 0 7px;
   outline: none;
   font-size: 11px;
   font-weight: 850;
-  transition: background-color 120ms ease, box-shadow 120ms ease;
-}
-
-.expression-pill select:focus-visible,
-.expression-pill input:focus-visible,
-.number-expression-node select:focus-visible,
-.number-expression-node input:focus-visible {
-  background: #ffffff;
-  box-shadow: 0 0 0 2px rgba(36, 119, 235, 0.35);
-}
-
-.expression-kind-select {
-  width: 64px;
 }
 
 .expression-variable-select {
-  width: min(105px, 26vw);
+  width: min(108px, 26vw);
+  padding: 0 5px;
+  background: transparent;
+  color: #ffffff;
 }
 
-.number-expression-node input[type="number"] {
-  width: 58px;
-}
-
-.operator-select {
-  width: 38px;
-  text-align: center;
+.expression-variable-select option {
   color: #172033;
+  background: #ffffff;
+}
+
+.variable-control select {
+  background: #edf3f7;
+  color: #172033;
+  padding: 0 7px;
+}
+
+.expression-kind-switch,
+.expression-operator-switch {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.expression-kind-switch {
+  width: 17px;
+  height: 24px;
+  border-left: 1px solid rgba(28, 48, 74, 0.12);
+  color: #6c7889;
+  opacity: 0.62;
+  transition: opacity 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.expression-variable > .expression-kind-switch,
+.expression-binary > .expression-kind-switch {
+  border-left-color: rgba(255, 255, 255, 0.24);
+  color: #ffffff;
+}
+
+.expression-kind-switch:hover,
+.expression-kind-switch:focus-within {
+  opacity: 1;
+}
+
+.expression-operator-switch {
+  min-width: 35px;
+  height: 27px;
+  gap: 1px;
+  padding: 0 4px 0 6px;
+  border-radius: 9px;
+  background: rgba(9, 88, 38, 0.24);
+  color: #ffffff;
+  transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.expression-operator-switch:hover,
+.expression-operator-switch:focus-within {
+  background: rgba(6, 67, 29, 0.38);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.24);
+  transform: translateY(-1px);
+}
+
+.expression-operator-symbol {
+  min-width: 13px;
+  color: inherit;
+  font-size: 16px;
+  font-weight: 950;
+  line-height: 1;
+  text-align: center;
+}
+
+.expression-operator-switch svg {
+  opacity: 0.72;
+}
+
+.expression-kind-switch select,
+.expression-operator-switch select {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.number-expression-node:focus-within {
+  outline: 2px solid rgba(36, 119, 235, 0.42);
+  outline-offset: 1px;
+}
+
+.palette-expression-preview {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.palette-expression-operand {
+  min-width: 25px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border: 1px solid rgba(28, 48, 74, 0.16);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #233049;
+  box-shadow: inset 0 -1px 0 rgba(24, 39, 65, 0.08);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.palette-expression-symbol {
+  min-width: 13px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 950;
+  line-height: 1;
+  text-align: center;
+}
+
+@keyframes expressionBuildIn {
+  from { opacity: 0.55; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
 }
 
 .app-shell.expression-number-dragging [data-expression-accepts="number"],

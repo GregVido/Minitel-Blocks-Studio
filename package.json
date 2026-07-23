@@ -35,7 +35,7 @@
   "author": "GregVido",
   "license": "Apache-2.0",
   "build": {
-    "appId": "fr.gregvido.minitel-blocks-studio",
+    "appId": "fr.fifou.minitel-blocks-studio",
     "productName": "Minitel Blocks Studio",
     "copyright": "Copyright © 2026 GregVido",
     "asar": true,
@@ -51,8 +51,12 @@
     ],
     "extraResources": [
       {
-        "from": "resources",
-        "to": "resources"
+        "from": "resources/esp32-toolchain",
+        "to": "esp32"
+      },
+      {
+        "from": "resources/MinitelESP32",
+        "to": "MinitelESP32"
       },
       {
         "from": "logo.png",
@@ -73,6 +77,7 @@
       "signExecutable": false
     },
     "nsis": {
+      "guid": "dc16544d-96e8-5455-9e3b-cb5886d28e5f",
       "oneClick": false,
       "perMachine": true,
       "allowToChangeInstallationDirectory": true,
@@ -81,7 +86,8 @@
       "shortcutName": "Minitel Blocks Studio",
       "runAfterFinish": true,
       "license": "LICENSE",
-      "packElevateHelper": true
+      "packElevateHelper": true,
+      "include": "build/installer.nsh"
     },
     "publish": [
       {

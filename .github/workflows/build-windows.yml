@@ -26,6 +26,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify update compatibility
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          if ($package.build.appId -ne "fr.fifou.minitel-blocks-studio") {
+            throw "Do not change build.appId: existing installations use this identity."
+          }
+          if ($package.build.nsis.guid -ne "dc16544d-96e8-5455-9e3b-cb5886d28e5f") {
+            throw "The stable NSIS update GUID is missing or has changed."
+          }
+          if ($package.build.nsis.include -ne "build/installer.nsh" -or -not (Test-Path "build/installer.nsh")) {
+            throw "The NSIS long-path update recovery script is missing."
+          }
+
       - name: Choose release version
         shell: pwsh
         run: |
@@ -52,12 +66,23 @@ jobs:
       - name: Build Windows installer
         run: npm run dist:win
 
-      - name: Verify updater elevation metadata
+      - name: Verify Windows update package
         shell: pwsh
         run: |
           $metadata = Get-Content "release/latest.yml" -Raw
           if ($metadata -notmatch "(?m)^\s+isAdminRightsRequired:\s+true\s*$") {
             throw "The Windows release is missing the updater elevation marker."
+          }
+
+          $requiredFiles = @(
+            "release/win-unpacked/resources/esp32/arduino-cli.exe",
+            "release/win-unpacked/resources/MinitelESP32/src/MinitelESP32.cpp",
+            "release/win-unpacked/resources/MinitelESP32/src/MinitelESP32.h"
+          )
+          foreach ($requiredFile in $requiredFiles) {
+            if (-not (Test-Path $requiredFile)) {
+              throw "Missing standalone ESP32 resource: $requiredFile"
+            }
           }
 
       - name: Upload workflow artifact

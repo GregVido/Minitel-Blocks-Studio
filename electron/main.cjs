@@ -20,6 +20,8 @@ let startupUpdateTimer = null;
 let updateInstallRequested = false;
 const managedChildren = new Set();
 
+app.setAppUserModelId("fr.fifou.minitel-blocks-studio");
+
 function broadcastUpdateState() {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
@@ -266,11 +268,11 @@ async function pathExists(filePath) {
 }
 
 function resourcesRoot() {
-  return app.isPackaged ? path.join(process.resourcesPath, "resources") : path.join(app.getAppPath(), "resources");
+  return app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), "resources");
 }
 
 function toolchainRoot() {
-  return path.join(resourcesRoot(), "esp32-toolchain");
+  return path.join(resourcesRoot(), app.isPackaged ? "esp32" : "esp32-toolchain");
 }
 
 function embeddedCliPath() {

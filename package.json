@@ -32,12 +32,12 @@
     "typescript": "^5.6.3",
     "vite": "^6.0.5"
   },
-  "author": "fifou",
+  "author": "GregVido",
   "license": "Apache-2.0",
   "build": {
-    "appId": "fr.fifou.minitel-blocks-studio",
+    "appId": "fr.gregvido.minitel-blocks-studio",
     "productName": "Minitel Blocks Studio",
-    "copyright": "Copyright © 2026 fifou",
+    "copyright": "Copyright © 2026 GregVido",
     "asar": true,
     "directories": {
       "output": "release",

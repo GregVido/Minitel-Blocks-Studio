@@ -105,11 +105,11 @@ async function installDownloadedUpdate() {
     return setUpdateState({ status: "ready", message: "Sauvegarde du projet impossible. Corrige le probleme puis reessaie." });
   }
   updateInstallRequested = true;
-  setUpdateState({ status: "installing", message: "Redemarrage pour installer la mise a jour..." });
+  setUpdateState({ status: "installing", message: "Ouverture de l'installation de la mise a jour..." });
   prepareForUpdateInstall();
   setImmediate(() => {
     try {
-      autoUpdater.quitAndInstall(true, true);
+      autoUpdater.quitAndInstall(false, true);
     } catch (error) {
       updateInstallRequested = false;
       handleUpdaterError(error);
@@ -126,7 +126,7 @@ async function offerDownloadedUpdate() {
       type: "info",
       title: "Mise a jour prete",
       message: "Une nouvelle version de Minitel Blocks Studio est prete.",
-      detail: "Version " + (updateState.version || "") + " telechargee. Redemarre l'application pour terminer l'installation.",
+      detail: "Version " + (updateState.version || "") + " telechargee. L'installation affichera sa progression, puis l'application redemarrera automatiquement.",
       buttons: ["Redemarrer maintenant", "Plus tard"],
       defaultId: 0,
       cancelId: 1,
@@ -151,6 +151,7 @@ function configureAutoUpdater() {
   updaterConfigured = true;
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.autoRunAppAfterInstall = true;
   autoUpdater.allowPrerelease = false;
   autoUpdater.installDirectory = path.dirname(process.execPath);
 

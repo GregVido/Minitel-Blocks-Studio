@@ -35,6 +35,7 @@ Var MbsOldInstallDir
 
   !macro customInstall
     !insertmacro MbsRestoreInstallerTemp
+    StrCpy $launchLink "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
   !macroend
 
   ; Older releases contain ESP32 paths that become too long when NSIS moves them

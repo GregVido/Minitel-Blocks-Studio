@@ -39,6 +39,19 @@ jobs:
           if ($package.build.nsis.include -ne "build/installer.nsh" -or -not (Test-Path "build/installer.nsh")) {
             throw "The NSIS long-path update recovery script is missing."
           }
+          if ($package.build.nsis.oneClick -ne $true -or $package.build.nsis.perMachine -ne $true) {
+            throw "Windows updates must use the elevated one-click installer."
+          }
+          if ($null -ne $package.build.nsis.allowToChangeInstallationDirectory) {
+            throw "A one-click update cannot allow changing the installation directory."
+          }
+          $mainProcess = Get-Content "electron/main.cjs" -Raw
+          if (-not $mainProcess.Contains("autoUpdater.quitAndInstall(false, true);")) {
+            throw "The updater must display installation progress and restart the application."
+          }
+          if (-not $mainProcess.Contains("autoUpdater.autoRunAppAfterInstall = true;")) {
+            throw "The updater must explicitly restart the application after installation."
+          }
 
       - name: Choose release version
         shell: pwsh

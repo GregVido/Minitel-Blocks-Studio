@@ -78,9 +78,8 @@
     },
     "nsis": {
       "guid": "dc16544d-96e8-5455-9e3b-cb5886d28e5f",
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": true,
-      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Minitel Blocks Studio",

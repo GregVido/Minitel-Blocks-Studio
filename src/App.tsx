@@ -170,6 +170,7 @@ type ProjectSnapshot = {
   screenConfig: MinitelScreenConfig;
   screens: MinitelScene[];
   activeScreenId: string;
+  workspaceMode: WorkspaceMode;
 };
 
 type ProjectMetadata = {
@@ -934,6 +935,10 @@ function validProjectDate(value: unknown, fallback: string) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
 
+function normalizeWorkspaceMode(value: unknown): WorkspaceMode {
+  return value === "designer" ? "designer" : "blocks";
+}
+
 function serializeProjectFile(snapshot: ProjectSnapshot, board: string, metadata: ProjectMetadata) {
   const document: ProjectFile = {
     format: PROJECT_FILE_FORMAT,
@@ -981,6 +986,7 @@ function parseProjectFile(contents: string): ParsedProjectFile {
     screenConfig,
     screens,
     activeScreenId,
+    workspaceMode: normalizeWorkspaceMode(projectSource.workspaceMode),
   };
   const board = typeof document.board === "string" && supportedProjectBoards.has(document.board) ? document.board : "esp32dev";
   const savedAt = validProjectDate(document.savedAt, new Date().toISOString());
@@ -1159,9 +1165,9 @@ function defaultProjectVariables() {
   return createDefaultVariables();
 }
 
-function createScreenState(name = "Écran principal", elements: SceneElement[] = []) {
+function createScreenState(name = "Écran principal", elements: SceneElement[] = [], workspaceMode: WorkspaceMode = "blocks") {
   const screen = createMinitelScene(name, elements);
-  return { screens: [screen], activeScreenId: screen.id };
+  return { screens: [screen], activeScreenId: screen.id, workspaceMode };
 }
 
 const projectExamples: ProjectExample[] = [
@@ -1216,6 +1222,7 @@ const projectExamples: ProjectExample[] = [
         screenConfig: config,
         screens: [screen],
         activeScreenId: screen.id,
+        workspaceMode: "designer",
       };
     },
   },
@@ -1255,6 +1262,7 @@ function createNewProjectSnapshot(settings: NewProjectSettings): ProjectSnapshot
     screenConfig,
     screens: [screen],
     activeScreenId: screen.id,
+    workspaceMode: "blocks",
   };
 }
 
@@ -2940,7 +2948,7 @@ function App() {
   const [screenConfig, setScreenConfig] = useState<MinitelScreenConfig>(() => initialProject.screenConfig);
   const [screens, setScreens] = useState<MinitelScene[]>(() => initialProject.screens);
   const [activeScreenId, setActiveScreenId] = useState(() => initialProject.activeScreenId);
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("blocks");
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => initialProject.workspaceMode);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [selectedStackId, setSelectedStackId] = useState<string>("");
   const [rightTab, setRightTab] = useState<RightTab>("preview");
@@ -2987,7 +2995,7 @@ function App() {
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
   }), [currentProject?.createdAt, currentProject?.name]);
-  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId }, board, currentMetadata) : "", [activeScreenId, board, currentMetadata, currentProject, screenConfig, screens, stacks, variables]);
+  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode }, board, currentMetadata) : "", [activeScreenId, board, currentMetadata, currentProject, screenConfig, screens, stacks, variables, workspaceMode]);
   const projectDirty = Boolean(currentProject && currentSignature !== lastSavedSignatureRef.current);
 
   useEffect(() => {
@@ -3273,7 +3281,7 @@ function App() {
   }
 
   function pushHistory() {
-    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId });
+    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode });
     setHistory((current) => {
       const last = current.past[current.past.length - 1];
       if (last && JSON.stringify(last) === JSON.stringify(snapshot)) {
@@ -3326,6 +3334,7 @@ function App() {
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
+    setWorkspaceMode(next.workspaceMode);
     setSelectedStackId((current) => (next.stacks.some((stack) => stack.id === current) ? current : next.stacks[0]?.id || ""));
     setSimRunning(false);
     setSimTick(0);
@@ -3336,7 +3345,7 @@ function App() {
   function undo() {
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode });
     setHistory({ past: history.past.slice(0, -1), future: [now, ...history.future].slice(0, HISTORY_LIMIT) });
     restoreSnapshot(previous);
     flashNotice("Retour en arrière");
@@ -3345,7 +3354,7 @@ function App() {
   function redo() {
     if (history.future.length === 0) return;
     const next = history.future[0];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode });
     setHistory({ past: [...history.past.slice(-HISTORY_LIMIT + 1), now], future: history.future.slice(1) });
     restoreSnapshot(next);
     flashNotice("Action rétablie");
@@ -3462,7 +3471,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeScreenId, appView, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables]);
+  }, [activeScreenId, appView, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables, workspaceMode]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -3821,7 +3830,7 @@ function App() {
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
-    setWorkspaceMode(next.screens.some((screen) => screen.elements.length > 0) ? "designer" : "blocks");
+    setWorkspaceMode(next.workspaceMode);
     setSelectedStackId(next.stacks[0]?.id ?? "");
     setSimRunning(false);
     setSimTick(0);
@@ -3926,7 +3935,7 @@ function App() {
     setCurrentProject(summary);
     setSelectedProjectId(summary.id);
     setSelectedStackId(next.stacks[0]?.id ?? "");
-    setWorkspaceMode(next.screens.some((screen) => screen.elements.length > 0) ? "designer" : "blocks");
+    setWorkspaceMode(next.workspaceMode);
     setRightTab("preview");
     setHistory({ past: [], future: [] });
     setSimRunning(false);
@@ -4016,7 +4025,7 @@ function App() {
     if (!currentProject || libraryBusy) return false;
     setLibraryBusy(true);
     setSaveState("saving");
-    const snapshot = { stacks, variables, screenConfig, screens, activeScreenId };
+    const snapshot = { stacks, variables, screenConfig, screens, activeScreenId, workspaceMode };
     const metadata = { name: currentProject.name, createdAt: currentProject.createdAt };
     try {
       const contents = serializeProjectFile(snapshot, board, metadata);
@@ -4041,7 +4050,7 @@ function App() {
   async function exportProjectFile() {
     if (!currentProject) return;
     const suggestedName = cleanProjectName(currentProject.name).replace(/\s+/g, "-") + ".mbs";
-    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId }, board, currentMetadata);
+    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode }, board, currentMetadata);
     try {
       if (window.minitelStudio?.exportProject) {
         const result = await window.minitelStudio.exportProject({ suggestedName, contents });

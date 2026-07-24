@@ -4,6 +4,12 @@ contextBridge.exposeInMainWorld("minitelStudio", {
   listProjects: () => ipcRenderer.invoke("project-library:list"),
   loadProject: (id) => ipcRenderer.invoke("project-library:load", { id }),
   saveProject: ({ id, contents }) => ipcRenderer.invoke("project-library:save", { id, contents }),
+  onAppSaveRequested: (callback) => {
+    const listener = (_event, request) => callback(request);
+    ipcRenderer.on("app-save-requested", listener);
+    return () => ipcRenderer.removeListener("app-save-requested", listener);
+  },
+  completeAppSaveRequest: ({ id, ok }) => ipcRenderer.send("app-save-complete", { id, ok }),
   deleteProject: (id) => ipcRenderer.invoke("project-library:delete", { id }),
   exportProject: ({ suggestedName, contents }) =>
     ipcRenderer.invoke("export-project", { suggestedName, contents }),

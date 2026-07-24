@@ -99,6 +99,8 @@ interface Window {
     listProjects: () => Promise<ProjectLibraryListResult>;
     loadProject: (id: string) => Promise<ManagedProjectLoadResult>;
     saveProject: (payload: { id?: string; contents: string }) => Promise<ManagedProjectSaveResult>;
+    onAppSaveRequested: (callback: (request: { id: string; reason: "close" | "update" }) => void) => () => void;
+    completeAppSaveRequest: (result: { id: string; ok: boolean }) => void;
     deleteProject: (id: string) => Promise<ManagedProjectDeleteResult>;
     exportProject: (payload: { suggestedName: string; contents: string }) => Promise<ProjectFileResult>;
     importProject: () => Promise<ProjectFileResult>;

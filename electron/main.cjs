@@ -18,6 +18,9 @@ let updateReady = false;
 let updatePromptOpen = false;
 let startupUpdateTimer = null;
 let updateInstallRequested = false;
+let updateInstallPreparing = false;
+const pendingRendererSaveRequests = new Map();
+const approvedWindowCloses = new WeakSet();
 const managedChildren = new Set();
 
 app.setAppUserModelId("fr.fifou.minitel-blocks-studio");
@@ -71,8 +74,36 @@ function prepareForUpdateInstall() {
   releaseRuntimeSubst();
 }
 
-function installDownloadedUpdate() {
-  if (!updateReady || updateInstallRequested) return { ...updateState };
+function requestRendererProjectSave(window, reason) {
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed() || window.webContents.isLoadingMainFrame()) return Promise.resolve(true);
+  const id = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const finish = (ok) => {
+      const pending = pendingRendererSaveRequests.get(id);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      pendingRendererSaveRequests.delete(id);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(true), 10000);
+    pendingRendererSaveRequests.set(id, { webContentsId: window.webContents.id, timer, finish });
+    try {
+      window.webContents.send("app-save-requested", { id, reason });
+    } catch {
+      finish(true);
+    }
+  });
+}
+
+async function installDownloadedUpdate() {
+  if (!updateReady || updateInstallRequested || updateInstallPreparing) return { ...updateState };
+  updateInstallPreparing = true;
+  const parent = BrowserWindow.getAllWindows()[0];
+  const saveReady = await requestRendererProjectSave(parent, "update");
+  updateInstallPreparing = false;
+  if (!saveReady) {
+    return setUpdateState({ status: "ready", message: "Sauvegarde du projet impossible. Corrige le probleme puis reessaie." });
+  }
   updateInstallRequested = true;
   setUpdateState({ status: "installing", message: "Redemarrage pour installer la mise a jour..." });
   prepareForUpdateInstall();
@@ -106,7 +137,7 @@ async function offerDownloadedUpdate() {
       ? await dialog.showMessageBox(parent, options)
       : await dialog.showMessageBox(options);
     if (result.response === 0) {
-      installDownloadedUpdate();
+      await installDownloadedUpdate();
     } else {
       setUpdateState({ status: "ready", message: "Mise a jour prete. Clique pour redemarrer." });
     }
@@ -217,6 +248,23 @@ function createWindow() {
 
   mainWindow.webContents.on("did-finish-load", () => {
     if (!mainWindow.isDestroyed()) mainWindow.webContents.send("app-update-status", { ...updateState });
+  });
+
+  let closeRequestInFlight = false;
+  mainWindow.on("close", (event) => {
+    if (approvedWindowCloses.has(mainWindow) || updateInstallRequested) return;
+    event.preventDefault();
+    if (updateInstallPreparing || closeRequestInFlight) return;
+    closeRequestInFlight = true;
+    void requestRendererProjectSave(mainWindow, "close").then((ok) => {
+      closeRequestInFlight = false;
+      if (!ok) {
+        if (!mainWindow.isDestroyed()) mainWindow.focus();
+        return;
+      }
+      approvedWindowCloses.add(mainWindow);
+      if (!mainWindow.isDestroyed()) mainWindow.close();
+    });
   });
   return mainWindow;
 }
@@ -583,6 +631,13 @@ app.on("window-all-closed", () => {
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+});
+
+ipcMain.on("app-save-complete", (event, payload) => {
+  const id = String(payload && payload.id || "");
+  const pending = pendingRendererSaveRequests.get(id);
+  if (!pending || pending.webContentsId !== event.sender.id) return;
+  pending.finish(Boolean(payload && payload.ok));
 });
 
 ipcMain.handle("get-update-status", async () => ({ ...updateState }));

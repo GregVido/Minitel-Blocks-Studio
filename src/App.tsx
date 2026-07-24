@@ -322,6 +322,8 @@ const HISTORY_LIMIT = 80;
 const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
 const PROJECT_FILE_VERSION = 2;
 const APP_THEME_STORAGE_KEY = "minitel-blocks-theme";
+const APP_AUTO_SAVE_STORAGE_KEY = "minitel-blocks-auto-save";
+const AUTO_SAVE_DELAY_MS = 900;
 
 function readInitialAppTheme(): AppTheme {
   try {
@@ -331,7 +333,16 @@ function readInitialAppTheme(): AppTheme {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+function readInitialAutoSaveEnabled() {
+  try {
+    return window.localStorage.getItem(APP_AUTO_SAVE_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
 const initialAppTheme = readInitialAppTheme();
+const initialAutoSaveEnabled = readInitialAutoSaveEnabled();
 document.documentElement.dataset.theme = initialAppTheme;
 document.documentElement.style.colorScheme = initialAppTheme;
 
@@ -2904,7 +2915,7 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
   );
 }
 
-function SettingsDialog({ open, theme, onThemeChange, onClose }: { open: boolean; theme: AppTheme; onThemeChange: (theme: AppTheme) => void; onClose: () => void }) {
+function SettingsDialog({ open, theme, autoSaveEnabled, onThemeChange, onAutoSaveChange, onClose }: { open: boolean; theme: AppTheme; autoSaveEnabled: boolean; onThemeChange: (theme: AppTheme) => void; onAutoSaveChange: (enabled: boolean) => void; onClose: () => void }) {
   if (!open) return null;
   return (
     <div className="settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -2920,6 +2931,11 @@ function SettingsDialog({ open, theme, onThemeChange, onClose }: { open: boolean
             <button type="button" className={theme === "light" ? "active" : ""} aria-pressed={theme === "light"} onClick={() => onThemeChange("light")}><Sun size={19} /><span>Clair</span></button>
             <button type="button" className={theme === "dark" ? "active" : ""} aria-pressed={theme === "dark"} onClick={() => onThemeChange("dark")}><Moon size={19} /><span>Sombre</span></button>
           </div>
+          <div className="settings-section-title"><Save size={17} /><span>Sauvegarde</span></div>
+          <button type="button" className="settings-toggle-row" role="switch" aria-checked={autoSaveEnabled} onClick={() => onAutoSaveChange(!autoSaveEnabled)}>
+            <span className="settings-toggle-copy"><strong>Sauvegarde automatique</strong><small>{autoSaveEnabled ? "Activée" : "Désactivée"}</small></span>
+            <span className={"settings-switch" + (autoSaveEnabled ? " active" : "")} aria-hidden="true"><i /></span>
+          </button>
         </div>
         <footer className="settings-footer"><button type="button" onClick={onClose}>Terminé</button></footer>
       </section>
@@ -2933,6 +2949,7 @@ function App() {
   const initialProject = initialProjectRef.current;
   const [appView, setAppView] = useState<"projects" | "studio">("projects");
   const [theme, setTheme] = useState<AppTheme>(initialAppTheme);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(initialAutoSaveEnabled);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projects, setProjects] = useState<ManagedProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -2942,6 +2959,7 @@ function App() {
   const [libraryMessage, setLibraryMessage] = useState("");
   const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving" | "error">("saved");
   const lastSavedSignatureRef = useRef("");
+  const saveInFlightRef = useRef<Promise<boolean> | null>(null);
   const [activeCategory, setActiveCategory] = useState("start");
   const [variables, setVariables] = useState<VariableDef[]>(() => initialProject.variables);
   const [stacks, setStacks] = useState<ScriptStack[]>(() => initialProject.stacks);
@@ -3005,6 +3023,12 @@ function App() {
       window.localStorage.setItem(APP_THEME_STORAGE_KEY, theme);
     } catch {}
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(APP_AUTO_SAVE_STORAGE_KEY, autoSaveEnabled ? "true" : "false");
+    } catch {}
+  }, [autoSaveEnabled]);
 
   function moveDragPreview(event: { clientX: number; clientY: number }) {
     if (!event.clientX && !event.clientY) return;
@@ -3471,7 +3495,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeScreenId, appView, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables, workspaceMode]);
+  }, [activeScreenId, appView, autoSaveEnabled, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables, workspaceMode]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -4021,30 +4045,45 @@ function App() {
     }
   }
 
-  async function saveProject(): Promise<boolean> {
-    if (!currentProject || libraryBusy) return false;
-    setLibraryBusy(true);
-    setSaveState("saving");
+  function saveProject({ quiet = false }: { quiet?: boolean } = {}): Promise<boolean> {
+    if (!currentProject) return Promise.resolve(false);
+    if (saveInFlightRef.current) return saveInFlightRef.current;
     const snapshot = { stacks, variables, screenConfig, screens, activeScreenId, workspaceMode };
     const metadata = { name: currentProject.name, createdAt: currentProject.createdAt };
-    try {
-      const contents = serializeProjectFile(snapshot, board, metadata);
-      const summary = await saveManagedProjectRecord(currentProject.id, contents);
-      const nextProjects = [summary, ...projects.filter((project) => project.id !== summary.id)]
-        .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt));
-      setProjects(nextProjects);
-      setCurrentProject(summary);
-      lastSavedSignatureRef.current = projectSnapshotSignature(snapshot, board, metadata);
-      setSaveState("saved");
-      flashNotice("Projet sauvegardé");
-      return true;
-    } catch (error) {
-      setSaveState("error");
-      flashNotice(error instanceof Error ? error.message : "Impossible de sauvegarder le projet");
-      return false;
-    } finally {
-      setLibraryBusy(false);
-    }
+    const operation = (async () => {
+      setLibraryBusy(true);
+      setSaveState("saving");
+      try {
+        const contents = serializeProjectFile(snapshot, board, metadata);
+        const summary = await saveManagedProjectRecord(currentProject.id, contents);
+        setProjects((current) => [summary, ...current.filter((project) => project.id !== summary.id)]
+          .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt)));
+        setCurrentProject(summary);
+        lastSavedSignatureRef.current = projectSnapshotSignature(snapshot, board, metadata);
+        setSaveState("saved");
+        if (!quiet) flashNotice("Projet sauvegardé");
+        return true;
+      } catch (error) {
+        setSaveState("error");
+        flashNotice(error instanceof Error ? error.message : "Impossible de sauvegarder le projet");
+        return false;
+      } finally {
+        setLibraryBusy(false);
+      }
+    })();
+    const tracked = operation.finally(() => {
+      if (saveInFlightRef.current === tracked) saveInFlightRef.current = null;
+    });
+    saveInFlightRef.current = tracked;
+    return tracked;
+  }
+
+  async function flushAutoSave() {
+    const pending = saveInFlightRef.current;
+    if (pending && !await pending) return false;
+    if (!autoSaveEnabled || appView !== "studio" || !currentProject) return true;
+    if (currentSignature === lastSavedSignatureRef.current) return true;
+    return saveProject({ quiet: true });
   }
 
   async function exportProjectFile() {
@@ -4107,9 +4146,11 @@ function App() {
   }
 
   async function goToProjectLibrary() {
-    if (libraryBusy) return;
-    if (projectDirty) {
-      const saved = await saveProject();
+    if (libraryBusy && !saveInFlightRef.current) return;
+    const pending = saveInFlightRef.current;
+    if (pending && !await pending) return;
+    if (autoSaveEnabled && currentSignature !== lastSavedSignatureRef.current) {
+      const saved = await saveProject({ quiet: true });
       if (!saved) return;
     }
     finishDrag();
@@ -4188,6 +4229,32 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!autoSaveEnabled || appView !== "studio" || !currentProject || !projectDirty || libraryBusy || saveState === "saving" || saveState === "error") return undefined;
+    const timer = window.setTimeout(() => void saveProject({ quiet: true }), AUTO_SAVE_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [appView, autoSaveEnabled, currentProject, currentSignature, libraryBusy, projectDirty, saveState]);
+
+  useEffect(() => {
+    const bridge = window.minitelStudio;
+    if (bridge?.onAppSaveRequested && bridge.completeAppSaveRequest) {
+      return bridge.onAppSaveRequested((request) => {
+        void flushAutoSave()
+          .then((ok) => bridge.completeAppSaveRequest({ id: request.id, ok }))
+          .catch(() => bridge.completeAppSaveRequest({ id: request.id, ok: false }));
+      });
+    }
+    const handleBeforeUnload = () => {
+      if (!autoSaveEnabled || appView !== "studio" || !currentProject || !projectDirty) return;
+      const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode }, board, currentMetadata);
+      const records = readBrowserProjectRecords().filter((record) => record.id !== currentProject.id);
+      records.push({ id: currentProject.id, contents, modifiedAt: new Date().toISOString() });
+      writeBrowserProjectRecords(records);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [activeScreenId, appView, autoSaveEnabled, board, currentMetadata, currentProject, currentSignature, projectDirty, screenConfig, screens, stacks, variables, workspaceMode]);
+
   const updateVisible = Boolean(appUpdate && !["idle", "disabled", "up-to-date"].includes(appUpdate.status));
   const updateCanAct = appUpdate?.status === "ready" || appUpdate?.status === "error";
   const updateLabel = !appUpdate ? "" :
@@ -4216,7 +4283,7 @@ function App() {
           onDelete={deleteManagedProject}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onClose={() => setSettingsOpen(false)} />
       </>
     );
   }
@@ -4417,7 +4484,7 @@ function App() {
         </div>
       ) : null}
 
-      <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onClose={() => setSettingsOpen(false)} />
       <div className={"notice " + (notice ? "show" : "")}>{notice}</div>
     </div>
   );

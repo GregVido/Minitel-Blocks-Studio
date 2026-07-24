@@ -106,7 +106,28 @@ type CompareExpr = {
   right: Expr;
 };
 
-type Expr = LiteralExpr | VariableExpr | BinaryExpr | CompareExpr;
+type RandomExpr = {
+  kind: "random";
+  valueType: "number";
+  from: Expr;
+  to: Expr;
+};
+
+type LogicalExpr = {
+  kind: "logical";
+  valueType: "boolean";
+  op: "&&" | "||";
+  left: Expr;
+  right: Expr;
+};
+
+type NotExpr = {
+  kind: "not";
+  valueType: "boolean";
+  operand: Expr;
+};
+
+type Expr = LiteralExpr | VariableExpr | BinaryExpr | CompareExpr | RandomExpr | LogicalExpr | NotExpr;
 type InputValue = string | number | boolean | Expr;
 type Values = Record<string, InputValue>;
 
@@ -214,7 +235,7 @@ type DropLocation = {
   index: number;
 };
 
-type ExpressionPathPart = "left" | "right";
+type ExpressionPathPart = "left" | "right" | "from" | "to" | "operand";
 
 type ExpressionDropOwner =
   | { owner: "block"; stackId: string; blockId: string; inputKey: string }
@@ -235,7 +256,7 @@ type DragPreviewState = {
   title: string;
   helper: string;
   color: string;
-  shape: "brick" | "event-hat" | "c-block" | "value-block";
+  shape: "brick" | "event-hat" | "c-block" | "value-block" | "condition-block";
   x: number;
   y: number;
 };
@@ -352,14 +373,19 @@ const boolExpr = (value: boolean): Expr => ({ kind: "literal", valueType: "boole
 const variableExpr = (name: string): Expr => ({ kind: "variable", valueType: "number", name });
 const binaryExpr = (op: BinaryExpr["op"], left: Expr, right: Expr): Expr => ({ kind: "binary", valueType: "number", op, left, right });
 const addExpr = (left: Expr, right: Expr): Expr => binaryExpr("+", left, right);
+const randomExpr = (from: Expr, to: Expr): Expr => ({ kind: "random", valueType: "number", from, to });
 const compareExpr = (left: Expr, op: CompareExpr["op"], right: Expr): Expr => ({ kind: "compare", valueType: "boolean", op, left, right });
+const logicalExpr = (left: Expr, op: LogicalExpr["op"], right: Expr): Expr => ({ kind: "logical", valueType: "boolean", op, left, right });
+const notExpr = (operand: Expr): Expr => ({ kind: "not", valueType: "boolean", operand });
 
-function expressionOperatorGlyph(op: BinaryExpr["op"] | CompareExpr["op"]) {
+function expressionOperatorGlyph(op: BinaryExpr["op"] | CompareExpr["op"] | LogicalExpr["op"]) {
   if (op === "-") return "\u2212";
   if (op === "*") return "\u00d7";
   if (op === "/") return "\u00f7";
   if (op === "==") return "=";
   if (op === "!=") return "\u2260";
+  if (op === "&&") return "et";
+  if (op === "||") return "ou";
   return op;
 }
 
@@ -685,7 +711,13 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "operator-subtract", title: "0 − 0", help: "Soustrait le nombre de droite à celui de gauche.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("-", num(0), num(0)) },
   { id: "operator-multiply", title: "1 × 1", help: "Multiplie deux nombres.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("*", num(1), num(1)) },
   { id: "operator-divide", title: "10 ÷ 2", help: "Divise le nombre de gauche par celui de droite. Une division par zéro donne 0.", kind: "value", category: "operators", color: "#42ad62", output: binaryExpr("/", num(10), num(2)) },
-  { id: "operator-compare", title: "0 > 0", help: "Compare deux valeurs dans une condition.", kind: "value", category: "operators", color: "#59b45f", output: compareExpr(num(0), ">", num(0)) },
+  { id: "operator-random", title: "nombre aléatoire", help: "Choisit un nombre entier aléatoire entre deux bornes incluses. Les bornes acceptent aussi des calculs.", kind: "value", category: "operators", color: "#42ad62", output: randomExpr(num(1), num(10)) },
+  { id: "operator-compare", title: "0 > 0", help: "Vrai si la valeur de gauche est plus grande.", kind: "value", category: "operators", color: "#59b45f", output: compareExpr(num(0), ">", num(0)) },
+  { id: "operator-less", title: "0 < 0", help: "Vrai si la valeur de gauche est plus petite.", kind: "value", category: "operators", color: "#59b45f", output: compareExpr(num(0), "<", num(0)) },
+  { id: "operator-equal", title: "0 = 0", help: "Vrai si les deux valeurs sont égales.", kind: "value", category: "operators", color: "#59b45f", output: compareExpr(num(0), "==", num(0)) },
+  { id: "operator-and", title: "condition et condition", help: "Vrai uniquement si les deux conditions sont vraies.", kind: "value", category: "operators", color: "#59b45f", output: logicalExpr(compareExpr(num(0), ">", num(0)), "&&", compareExpr(num(0), ">", num(0))) },
+  { id: "operator-or", title: "condition ou condition", help: "Vrai si au moins une des deux conditions est vraie.", kind: "value", category: "operators", color: "#59b45f", output: logicalExpr(compareExpr(num(0), ">", num(0)), "||", compareExpr(num(0), ">", num(0))) },
+  { id: "operator-not", title: "non condition", help: "Inverse une condition vraie ou fausse.", kind: "value", category: "operators", color: "#59b45f", output: notExpr(compareExpr(num(0), ">", num(0))) },
 
   { id: "show-key", title: "afficher la touche reçue", help: "Écrit la touche lue par le Minitel, dans une pile de touche.", kind: "action", category: "input", color: "#e14d72", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
@@ -748,17 +780,37 @@ function normalizeImportedNumberExpr(value: unknown, fallback: Expr = num(0)): E
       right: normalizeImportedNumberExpr(record.right),
     };
   }
+  if (record.kind === "random") {
+    return randomExpr(
+      normalizeImportedNumberExpr(record.from, num(1)),
+      normalizeImportedNumberExpr(record.to, num(10)),
+    );
+  }
   return cloneValue(fallback);
 }
 
 function normalizeImportedCondition(value: unknown, fallback: Expr): Expr {
   const record = importedRecord(value);
+  const emptyCondition = compareExpr(num(0), ">", num(0));
   if (record?.kind === "compare" && ["==", "!=", "<", "<=", ">", ">="].includes(String(record.op))) {
     return compareExpr(
       normalizeImportedNumberExpr(record.left),
       String(record.op) as CompareExpr["op"],
       normalizeImportedNumberExpr(record.right),
     );
+  }
+  if (record?.kind === "logical" && ["&&", "||"].includes(String(record.op))) {
+    return logicalExpr(
+      normalizeImportedCondition(record.left, emptyCondition),
+      String(record.op) as LogicalExpr["op"],
+      normalizeImportedCondition(record.right, emptyCondition),
+    );
+  }
+  if (record?.kind === "not") {
+    return notExpr(normalizeImportedCondition(record.operand, emptyCondition));
+  }
+  if (record?.kind === "literal" && typeof record.value === "boolean") {
+    return boolExpr(record.value);
   }
   return cloneValue(fallback);
 }
@@ -1408,6 +1460,12 @@ function exprCode(value: InputValue | undefined, fallback: Expr = num(0)): strin
     }
     case "compare":
       return "(" + exprCode(expr.left) + " " + expr.op + " " + exprCode(expr.right) + ")";
+    case "random":
+      return "mbsRandomInclusive((long)(" + exprCode(expr.from) + "), (long)(" + exprCode(expr.to) + "))";
+    case "logical":
+      return "(" + exprCode(expr.left, boolExpr(false)) + " " + expr.op + " " + exprCode(expr.right, boolExpr(false)) + ")";
+    case "not":
+      return "(!(" + exprCode(expr.operand, boolExpr(false)) + "))";
   }
 }
 
@@ -1427,7 +1485,16 @@ function exprPreviewNumber(value: InputValue | undefined, variables: Record<stri
       if (expr.op === "/") return right === 0 ? 0 : left / right;
       return right === 0 ? 0 : left % right;
     }
+    case "random": {
+      const first = Math.round(exprPreviewNumber(expr.from, variables, fallback));
+      const last = Math.round(exprPreviewNumber(expr.to, variables, fallback));
+      const low = Math.min(first, last);
+      const high = Math.max(first, last);
+      return low + Math.floor(Math.random() * (high - low + 1));
+    }
     case "compare":
+    case "logical":
+    case "not":
       return exprPreviewBoolean(expr, variables) ? 1 : 0;
   }
 }
@@ -1447,6 +1514,14 @@ function exprPreviewBoolean(value: InputValue | undefined, variables: Record<str
     if (expr.op === ">") return left > right;
     return left >= right;
   }
+  if (expr.kind === "logical") {
+    return expr.op === "&&"
+      ? exprPreviewBoolean(expr.left, variables) && exprPreviewBoolean(expr.right, variables)
+      : exprPreviewBoolean(expr.left, variables) || exprPreviewBoolean(expr.right, variables);
+  }
+  if (expr.kind === "not") {
+    return !exprPreviewBoolean(expr.operand, variables);
+  }
   return exprPreviewNumber(expr, variables) !== 0;
 }
 
@@ -1460,10 +1535,16 @@ function expressionLabel(value: InputValue | undefined): string {
   if (value.kind === "variable") {
     return value.name;
   }
-  if (value.kind === "binary") {
-    return expressionLabel(value.left) + " " + value.op + " " + expressionLabel(value.right);
+  if (value.kind === "binary" || value.kind === "compare") {
+    return expressionLabel(value.left) + " " + expressionOperatorGlyph(value.op) + " " + expressionLabel(value.right);
   }
-  return expressionLabel(value.left) + " " + value.op + " " + expressionLabel(value.right);
+  if (value.kind === "random") {
+    return "aléatoire " + expressionLabel(value.from) + " à " + expressionLabel(value.to);
+  }
+  if (value.kind === "logical") {
+    return expressionLabel(value.left) + " " + expressionOperatorGlyph(value.op) + " " + expressionLabel(value.right);
+  }
+  return "non " + expressionLabel(value.operand);
 }
 
 function collectExprVariables(value: InputValue | undefined, target: Set<string>) {
@@ -1474,9 +1555,18 @@ function collectExprVariables(value: InputValue | undefined, target: Set<string>
     target.add(value.name);
     return;
   }
-  if (value.kind === "binary" || value.kind === "compare") {
+  if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
     collectExprVariables(value.left, target);
     collectExprVariables(value.right, target);
+    return;
+  }
+  if (value.kind === "random") {
+    collectExprVariables(value.from, target);
+    collectExprVariables(value.to, target);
+    return;
+  }
+  if (value.kind === "not") {
+    collectExprVariables(value.operand, target);
   }
 }
 
@@ -1718,6 +1808,15 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const variableNames = collectVariableNames(stacks, variables);
   const lines: string[] = ["#include <Arduino.h>", "#include <MinitelESP32.h>", "", "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows, "MinitelESP32 minitel(Serial2, 16, 17, 1200);"];
+
+  lines.push(
+    "",
+    "long mbsRandomInclusive(long first, long second) {",
+    "  long low = first < second ? first : second;",
+    "  long high = first < second ? second : first;",
+    "  return low == high ? low : random(low, high + 1);",
+    "}",
+  );
 
   if (variableNames.length > 0) {
     lines.push("");
@@ -2140,11 +2239,30 @@ function numberExpression(value: InputValue | undefined): Expr {
   return num(Number.isFinite(numericValue) ? numericValue : 0);
 }
 
+type BooleanExpression = LiteralExpr | CompareExpr | LogicalExpr | NotExpr;
+
+function booleanExpression(value: InputValue | undefined, variables: VariableDef[]): BooleanExpression {
+  if (isExpr(value) && value.valueType === "boolean") return value as BooleanExpression;
+  return compareExpr(variableExpr(variables[0]?.name ?? "maVariable"), ">", num(0)) as CompareExpr;
+}
+
 function replaceExprAtPath(root: Expr, path: ExpressionPathPart[], replacement: Expr): Expr {
   if (path.length === 0) return cloneValue(replacement);
-  if (root.kind !== "binary" && root.kind !== "compare") return root;
-  const [side, ...rest] = path;
-  return { ...root, [side]: replaceExprAtPath(root[side], rest, replacement) };
+  const [part, ...rest] = path;
+  if (root.kind === "binary" || root.kind === "compare" || root.kind === "logical") {
+    if (part === "left") return { ...root, left: replaceExprAtPath(root.left, rest, replacement) };
+    if (part === "right") return { ...root, right: replaceExprAtPath(root.right, rest, replacement) };
+    return root;
+  }
+  if (root.kind === "random") {
+    if (part === "from") return { ...root, from: replaceExprAtPath(root.from, rest, replacement) };
+    if (part === "to") return { ...root, to: replaceExprAtPath(root.to, rest, replacement) };
+    return root;
+  }
+  if (root.kind === "not" && part === "operand") {
+    return { ...root, operand: replaceExprAtPath(root.operand, rest, replacement) };
+  }
+  return root;
 }
 
 function setInvisibleDragImage(event: DragEvent<HTMLElement>) {
@@ -2157,7 +2275,7 @@ function setInvisibleDragImage(event: DragEvent<HTMLElement>) {
 function dragShapeForDefinition(definition: BlockDefinition): DragPreviewState["shape"] {
   if (definition.kind === "event") return "event-hat";
   if (definition.kind === "control") return "c-block";
-  if (definition.kind === "value") return "value-block";
+  if (definition.kind === "value") return definition.output?.valueType === "boolean" ? "condition-block" : "value-block";
   return "brick";
 }
 
@@ -2196,7 +2314,7 @@ function duplicateBlockInList(blocks: ProgramBlock[], blockId: string): { blocks
   return { blocks: next, done, duplicateIds };
 }
 
-type NumberExpressionMode = "literal" | "variable" | "binary";
+type NumberExpressionMode = "literal" | "variable" | "binary" | "random";
 
 function ExpressionKindSwitch({
   mode,
@@ -2209,6 +2327,7 @@ function ExpressionKindSwitch({
     literal: "Nombre",
     variable: "Variable",
     binary: "Calcul",
+    random: "Aléatoire",
   };
 
   return (
@@ -2218,6 +2337,7 @@ function ExpressionKindSwitch({
         <option value="literal">Nombre</option>
         <option value="variable">Variable</option>
         <option value="binary">Calcul</option>
+        <option value="random">Aléatoire</option>
       </select>
     </span>
   );
@@ -2236,7 +2356,7 @@ function ExpressionOperatorSwitch({
 }) {
   return (
     <span className="expression-operator-switch" title={label}>
-      <strong className="expression-operator-symbol" aria-hidden="true">{expressionOperatorGlyph(value as BinaryExpr["op"] | CompareExpr["op"])}</strong>
+      <strong className="expression-operator-symbol" aria-hidden="true">{expressionOperatorGlyph(value as BinaryExpr["op"] | CompareExpr["op"] | LogicalExpr["op"])}</strong>
       <ChevronDown size={10} aria-hidden="true" />
       <select value={value} aria-label={label} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => <option value={option.value} key={option.value}>{option.label}</option>)}
@@ -2257,10 +2377,16 @@ function NumberExpressionNode({
   dropLocation?: ExpressionDropLocation;
 }) {
   const expr = numberExpression(value);
-  const mode: NumberExpressionMode = expr.kind === "binary" ? "binary" : expr.kind === "variable" ? "variable" : "literal";
+  const mode: NumberExpressionMode = expr.kind === "binary"
+    ? "binary"
+    : expr.kind === "random"
+      ? "random"
+      : expr.kind === "variable"
+        ? "variable"
+        : "literal";
   const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
-  const childLocation = (side: ExpressionPathPart): ExpressionDropLocation | undefined => (
-    dropLocation ? { ...dropLocation, path: [...dropLocation.path, side], accepts: "number" } : undefined
+  const childLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "number" } : undefined
   );
 
   const changeMode = (nextMode: NumberExpressionMode) => {
@@ -2268,6 +2394,8 @@ function NumberExpressionNode({
       onChange(variableExpr(variables[0]?.name ?? "maVariable"));
     } else if (nextMode === "binary") {
       onChange(binaryExpr("+", cloneValue(expr), num(0)));
+    } else if (nextMode === "random") {
+      onChange(randomExpr(num(1), num(10)));
     } else {
       onChange(num(expr.kind === "literal" && expr.valueType === "number" ? Number(expr.value) || 0 : 0));
     }
@@ -2286,17 +2414,27 @@ function NumberExpressionNode({
             <NumberExpressionNode value={expr.left} variables={variables} dropLocation={childLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
             <ExpressionOperatorSwitch
               value={expr.op}
-              label="Choisir l'op\u00e9ration"
+              label="Choisir l'opération"
               options={[
                 { value: "+", label: "+" },
-                { value: "-", label: "\u2212" },
-                { value: "*", label: "\u00d7" },
-                { value: "/", label: "\u00f7" },
+                { value: "-", label: "−" },
+                { value: "*", label: "×" },
+                { value: "/", label: "÷" },
                 { value: "%", label: "%" },
               ]}
               onChange={(next) => onChange({ ...expr, op: next as BinaryExpr["op"] })}
             />
             <NumberExpressionNode value={expr.right} variables={variables} dropLocation={childLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+          </span>
+          <ExpressionKindSwitch mode={mode} onChange={changeMode} />
+        </>
+      ) : mode === "random" && expr.kind === "random" ? (
+        <>
+          <span className="random-expression-tree">
+            <strong className="random-expression-label">aléatoire</strong>
+            <NumberExpressionNode value={expr.from} variables={variables} dropLocation={childLocation("from")} onChange={(next) => onChange({ ...expr, from: next })} />
+            <span className="random-expression-separator">à</span>
+            <NumberExpressionNode value={expr.to} variables={variables} dropLocation={childLocation("to")} onChange={(next) => onChange({ ...expr, to: next })} />
           </span>
           <ExpressionKindSwitch mode={mode} onChange={changeMode} />
         </>
@@ -2347,6 +2485,80 @@ function NumberExpressionEditor({
   );
 }
 
+function BooleanExpressionNode({
+  value,
+  variables,
+  onChange,
+  dropLocation,
+}: {
+  value: Expr;
+  variables: VariableDef[];
+  onChange: (value: Expr) => void;
+  dropLocation?: ExpressionDropLocation;
+}) {
+  const expr = booleanExpression(value, variables);
+  const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
+  const booleanLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "boolean" } : undefined
+  );
+  const numberLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "number" } : undefined
+  );
+
+  return (
+    <span
+      className={"condition-expression boolean-expression-node expression-" + expr.kind}
+      data-expression-drop={dropLocation ? JSON.stringify(dropLocation) : undefined}
+      data-expression-drop-key={dropKey}
+      data-expression-accepts={dropLocation?.accepts}
+    >
+      {expr.kind === "compare" ? (
+        <span className="comparison-expression-tree">
+          <NumberExpressionNode value={expr.left} variables={variables} dropLocation={numberLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+          <ExpressionOperatorSwitch
+            value={expr.op}
+            label="Choisir la comparaison"
+            options={[
+              { value: "==", label: "=" },
+              { value: "!=", label: "≠" },
+              { value: "<", label: "<" },
+              { value: "<=", label: "≤" },
+              { value: ">", label: ">" },
+              { value: ">=", label: "≥" },
+            ]}
+            onChange={(next) => onChange({ ...expr, op: next as CompareExpr["op"] })}
+          />
+          <NumberExpressionNode value={expr.right} variables={variables} dropLocation={numberLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+        </span>
+      ) : expr.kind === "logical" ? (
+        <span className="logical-expression-tree">
+          <BooleanExpressionNode value={expr.left} variables={variables} dropLocation={booleanLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+          <ExpressionOperatorSwitch
+            value={expr.op}
+            label="Choisir la logique"
+            options={[
+              { value: "&&", label: "et" },
+              { value: "||", label: "ou" },
+            ]}
+            onChange={(next) => onChange({ ...expr, op: next as LogicalExpr["op"] })}
+          />
+          <BooleanExpressionNode value={expr.right} variables={variables} dropLocation={booleanLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+        </span>
+      ) : expr.kind === "not" ? (
+        <span className="not-expression-tree">
+          <strong className="condition-not-label">non</strong>
+          <BooleanExpressionNode value={expr.operand} variables={variables} dropLocation={booleanLocation("operand")} onChange={(next) => onChange({ ...expr, operand: next })} />
+        </span>
+      ) : (
+        <select className="condition-literal-select" value={Boolean(expr.value) ? "true" : "false"} aria-label="Valeur logique" onChange={(event) => onChange(boolExpr(event.target.value === "true"))}>
+          <option value="true">vrai</option>
+          <option value="false">faux</option>
+        </select>
+      )}
+    </span>
+  );
+}
+
 function BooleanExpressionEditor({
   value,
   variables,
@@ -2358,38 +2570,13 @@ function BooleanExpressionEditor({
   onChange: (value: Expr) => void;
   expressionOwner?: ExpressionDropOwner;
 }) {
-  const expr = (isExpr(value) && value.kind === "compare"
-    ? value
-    : compareExpr(variableExpr(variables[0]?.name ?? "maVariable"), ">", num(0))) as CompareExpr;
-  const conditionLocation: ExpressionDropLocation | undefined = expressionOwner
+  const expr = booleanExpression(value, variables);
+  const dropLocation: ExpressionDropLocation | undefined = expressionOwner
     ? { ...expressionOwner, path: [], accepts: "boolean" }
     : undefined;
-  const numberLocation = (side: ExpressionPathPart): ExpressionDropLocation | undefined => (
-    expressionOwner ? { ...expressionOwner, path: [side], accepts: "number" } : undefined
-  );
-
   return (
-    <span
-      className="expression-pill condition-expression"
-      data-expression-drop={conditionLocation ? JSON.stringify(conditionLocation) : undefined}
-      data-expression-drop-key={conditionLocation ? expressionDropLocationKey(conditionLocation) : undefined}
-      data-expression-accepts={conditionLocation?.accepts}
-    >
-      <NumberExpressionNode value={expr.left} variables={variables} dropLocation={numberLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
-      <ExpressionOperatorSwitch
-        value={expr.op}
-        label="Choisir la comparaison"
-        options={[
-          { value: "==", label: "=" },
-          { value: "!=", label: "\u2260" },
-          { value: "<", label: "<" },
-          { value: "<=", label: "\u2264" },
-          { value: ">", label: ">" },
-          { value: ">=", label: "\u2265" },
-        ]}
-        onChange={(next) => onChange({ ...expr, op: next as CompareExpr["op"] })}
-      />
-      <NumberExpressionNode value={expr.right} variables={variables} dropLocation={numberLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+    <span className="expression-pill boolean-expression">
+      <BooleanExpressionNode value={expr} variables={variables} onChange={onChange} dropLocation={dropLocation} />
     </span>
   );
 }
@@ -2511,14 +2698,44 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
   );
 }
 
-function PaletteExpressionPreview({ expression }: { expression: BinaryExpr | CompareExpr }) {
-  return (
-    <span className={"palette-expression-preview " + (expression.kind === "compare" ? "is-condition" : "is-binary")} aria-hidden="true">
-      <span className="palette-expression-operand">{expressionLabel(expression.left)}</span>
-      <strong className="palette-expression-symbol">{expressionOperatorGlyph(expression.op)}</strong>
-      <span className="palette-expression-operand">{expressionLabel(expression.right)}</span>
-    </span>
-  );
+function PaletteExpressionPreview({ expression }: { expression: Expr }) {
+  if (expression.kind === "binary" || expression.kind === "compare") {
+    return (
+      <span className={"palette-expression-preview " + (expression.kind === "compare" ? "is-condition" : "is-binary")} aria-hidden="true">
+        <span className="palette-expression-operand">{expressionLabel(expression.left)}</span>
+        <strong className="palette-expression-symbol">{expressionOperatorGlyph(expression.op)}</strong>
+        <span className="palette-expression-operand">{expressionLabel(expression.right)}</span>
+      </span>
+    );
+  }
+  if (expression.kind === "random") {
+    return (
+      <span className="palette-expression-preview is-random" aria-hidden="true">
+        <strong className="palette-expression-word">aléatoire</strong>
+        <span className="palette-expression-operand">{expressionLabel(expression.from)}</span>
+        <strong className="palette-expression-word">à</strong>
+        <span className="palette-expression-operand">{expressionLabel(expression.to)}</span>
+      </span>
+    );
+  }
+  if (expression.kind === "logical") {
+    return (
+      <span className="palette-expression-preview is-condition is-logical" aria-hidden="true">
+        <span className="palette-condition-operand" />
+        <strong className="palette-expression-word">{expressionOperatorGlyph(expression.op)}</strong>
+        <span className="palette-condition-operand" />
+      </span>
+    );
+  }
+  if (expression.kind === "not") {
+    return (
+      <span className="palette-expression-preview is-condition is-not" aria-hidden="true">
+        <strong className="palette-expression-word">non</strong>
+        <span className="palette-condition-operand" />
+      </span>
+    );
+  }
+  return <span className="palette-expression-preview">{expressionLabel(expression)}</span>;
 }
 
 function PaletteBlock({
@@ -2539,8 +2756,14 @@ function PaletteBlock({
   onDragEnd: () => void;
 }) {
   const style = { "--block-color": definition.color } as BlockStyle;
-  const shape = definition.kind === "event" ? "event-hat" : definition.kind === "control" ? "palette-c-block" : definition.kind === "value" ? "value-block" : "brick";
-  const expressionPreview = definition.output?.kind === "binary" || definition.output?.kind === "compare" ? definition.output : null;
+  const shape = definition.kind === "event"
+    ? "event-hat"
+    : definition.kind === "control"
+      ? "palette-c-block"
+      : definition.kind === "value"
+        ? definition.output?.valueType === "boolean" ? "condition-value-block" : "value-block"
+        : "brick";
+  const expressionPreview = definition.output ?? null;
   return (
     <button
       className={"palette-block " + shape + (isDragging ? " dragging" : "")}
@@ -3579,7 +3802,7 @@ function App() {
   function quickAddDefinition(definition: BlockDefinition) {
     if (suppressPaletteClickRef.current) return;
     if (definition.kind === "value") {
-      flashNotice("Fais glisser cette opération dans un champ nombre");
+      flashNotice("Fais glisser ce bloc dans une valeur compatible");
       return;
     }
     if (definition.kind === "event") {
@@ -4347,7 +4570,7 @@ function App() {
             </div>
             <div className="palette-list">
               {activeCategory === "variables" ? <VariableManager variables={variables} onAdd={addVariable} onChange={changeVariable} onRemove={removeVariable} /> : null}
-              {activeCategory === "operators" ? <div className="operator-shelf"><Sigma size={18} /><span>Nombres, variables, calculs</span></div> : null}
+              {activeCategory === "operators" ? <div className="operator-shelf"><Sigma size={18} /><span>Nombres, hasard et conditions</span></div> : null}
               {activeBlocks.map((definition) => <PaletteBlock definition={definition} isDragging={draggingPaletteId === definition.id} onQuickAdd={quickAddDefinition} onPaletteDragStart={beginPaletteDrag} onPalettePointerDown={preparePalettePointerDrag} onDragMove={moveDragPreview} onDragEnd={finishDrag} key={definition.id} />)}
             </div>
           </aside>

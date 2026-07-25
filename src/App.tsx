@@ -3150,7 +3150,7 @@ function PaletteBlock({
   const expressionPreview = definition.output ?? null;
   return (
     <button
-      className={"palette-block " + shape + (isDragging ? " dragging" : "")}
+      className={"palette-block " + shape + (definition.inputs?.length ? " has-inputs" : "") + (isDragging ? " dragging" : "")}
       style={style}
       draggable={false}
       onPointerDown={(event) => onPalettePointerDown(definition, event)}
@@ -3165,10 +3165,14 @@ function PaletteBlock({
       title={definition.help}
       aria-label={definition.title}
     >
-      {expressionPreview ? <PaletteExpressionPreview expression={expressionPreview} /> : <span>{definition.title}</span>}
-      {definition.inputs?.slice(0, 2).map((input) => (
-        <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : input.secret ? "••••••" : input.placeholder || expressionLabel(input.defaultValue)}</span>
-      ))}
+      {expressionPreview ? <PaletteExpressionPreview expression={expressionPreview} /> : <span className="palette-block-title">{definition.title}</span>}
+      {definition.inputs?.length ? (
+        <span className="palette-block-inputs">
+          {definition.inputs.slice(0, 2).map((input) => (
+            <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : input.secret ? "••••••" : input.placeholder || expressionLabel(input.defaultValue)}</span>
+          ))}
+        </span>
+      ) : null}
     </button>
   );
 }

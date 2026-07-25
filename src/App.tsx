@@ -40,6 +40,7 @@ import Upload from "lucide-react/dist/esm/icons/upload.js";
 import Usb from "lucide-react/dist/esm/icons/usb.js";
 import Variable from "lucide-react/dist/esm/icons/variable.js";
 import Volume2 from "lucide-react/dist/esm/icons/volume-2.js";
+import Wifi from "lucide-react/dist/esm/icons/wifi.js";
 import Wand2 from "lucide-react/dist/esm/icons/wand-2.js";
 import X from "lucide-react/dist/esm/icons/x.js";
 import type { LucideIcon } from "lucide-react";
@@ -141,6 +142,8 @@ type BlockInput = {
   max?: number;
   step?: number;
   compact?: boolean;
+  placeholder?: string;
+  secret?: boolean;
 };
 
 type SlotDefinition = {
@@ -645,6 +648,7 @@ const categories: Category[] = [
   { id: "variables", label: "Variables", accent: "#f25f5c", icon: Variable },
   { id: "operators", label: "Opérations", accent: "#59b45f", icon: Sigma },
   { id: "input", label: "Entrées", accent: "#e14d72", icon: Keyboard },
+  { id: "network", label: "Réseau", accent: "#0b9f8a", icon: Wifi },
   { id: "graphics", label: "Graphique", accent: "#16a6b6", icon: Sparkles },
   { id: "advanced", label: "Avancé", accent: "#5d6679", icon: Cpu },
 ];
@@ -734,6 +738,11 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "row", label: "ligne", type: "number", defaultValue: num(22), min: 1, max: 24, compact: true },
   ] },
   { id: "read-line", title: "demander un texte", help: "Lit une ligne saisie au clavier du Minitel.", kind: "action", category: "input", color: "#e14d72", inputs: [{ key: "timeout", label: "timeout ms", type: "number", defaultValue: num(5000), min: 0, max: 60000, step: 500 }] },
+
+  { id: "wifi-connect", title: "se connecter au Wi-Fi", help: "Connecte l'ESP32 au réseau indiqué. Place ce bloc dans la pile de démarrage.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
+    { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
+    { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
+  ] },
 
   { id: "graphic-mode", title: "mode mosaïque", help: "Active les caractères graphiques du Minitel.", kind: "action", category: "graphics", color: "#16a6b6" },
   { id: "text-mode", title: "mode texte", help: "Revient aux caractères texte classiques.", kind: "action", category: "graphics", color: "#16a6b6" },
@@ -1588,6 +1597,16 @@ function walkBlocks(blocks: ProgramBlock[], visit: (block: ProgramBlock) => void
   });
 }
 
+function projectUsesBlock(stacks: ScriptStack[], definitionId: string) {
+  return stacks.some((stack) => {
+    let found = false;
+    walkBlocks(stack.blocks, (block) => {
+      if (block.definitionId === definitionId) found = true;
+    });
+    return found;
+  });
+}
+
 function collectVariableNames(stacks: ScriptStack[], variables: VariableDef[]) {
   const names = new Set<string>();
   variables.forEach((variable) => names.add(variable.name));
@@ -1722,6 +1741,22 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent + 2, "minitel.readLine(saisie, sizeof(saisie), (uint32_t)(" + exprCode(values.timeout, num(5000)) + "), true);");
         pushLine(lines, indent, "}");
         break;
+      case "wifi-connect": {
+        const ssid = textValue(values.ssid, "");
+        if (!ssid) {
+          pushLine(lines, indent, "// Connexion Wi-Fi ignorée : le SSID est vide.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "WiFi.mode(WIFI_STA);");
+        pushLine(lines, indent + 2, "WiFi.begin(" + cppString(ssid) + ", " + cppString(values.password) + ");");
+        pushLine(lines, indent + 2, "const uint32_t wifiStartedAt = millis();");
+        pushLine(lines, indent + 2, "while (WiFi.status() != WL_CONNECTED && millis() - wifiStartedAt < 15000UL) {");
+        pushLine(lines, indent + 4, "delay(250);");
+        pushLine(lines, indent + 2, "}");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "graphic-mode":
         pushLine(lines, indent, "minitel.graphicMode();");
         break;
@@ -1817,7 +1852,8 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const variableNames = collectVariableNames(stacks, variables);
-  const lines: string[] = ["#include <Arduino.h>", "#include <MinitelESP32.h>", "", "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows, "MinitelESP32 minitel(Serial2, 16, 17, 1200);"];
+  const usesWifi = projectUsesBlock(stacks, "wifi-connect");
+  const lines: string[] = ["#include <Arduino.h>", ...(usesWifi ? ["#include <WiFi.h>"] : []), "#include <MinitelESP32.h>", "", "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows, "MinitelESP32 minitel(Serial2, 16, 17, 1200);"];
 
   lines.push(
     "",
@@ -2038,6 +2074,11 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "read-line":
         state.messages.push("Lecture clavier simulée");
         break;
+      case "wifi-connect": {
+        const ssid = textValue(values.ssid, "");
+        state.messages.push(ssid ? "Wi-Fi : connexion à " + ssid + " (simulation)" : "Wi-Fi : SSID manquant");
+        break;
+      }
       case "graphic-mode":
         state.messages.push("Mode mosaïque");
         break;
@@ -2640,7 +2681,7 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
     return (
       <label className="block-control block-control-wide" onMouseDown={stopDrag}>
         <span>{input.label}</span>
-        <input type="text" value={String(actualValue)} onChange={(event) => onChange(event.target.value)} />
+        <input type={input.secret ? "password" : "text"} value={String(actualValue)} placeholder={input.placeholder} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
       </label>
     );
   }
@@ -2793,7 +2834,7 @@ function PaletteBlock({
     >
       {expressionPreview ? <PaletteExpressionPreview expression={expressionPreview} /> : <span>{definition.title}</span>}
       {definition.inputs?.slice(0, 2).map((input) => (
-        <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : expressionLabel(input.defaultValue)}</span>
+        <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : input.secret ? "••••••" : input.placeholder || expressionLabel(input.defaultValue)}</span>
       ))}
     </button>
   );

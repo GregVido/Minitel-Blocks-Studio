@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("minitelStudio", {
   },
   getUpdateStatus: () => ipcRenderer.invoke("get-update-status"),
   checkForUpdates: () => ipcRenderer.invoke("check-for-updates"),
+  setAutomaticUpdatesEnabled: (enabled) => ipcRenderer.invoke("set-automatic-updates-enabled", { enabled }),
   installUpdate: () => ipcRenderer.invoke("install-update"),
   onUpdateStatus: (callback) => {
     const listener = (_event, status) => callback(status);

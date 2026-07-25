@@ -205,7 +205,8 @@ body,
   color: var(--blue);
 }
 
-.settings-theme-control + .settings-section-title {
+.settings-theme-control + .settings-section-title,
+.settings-toggle-row + .settings-section-title {
   margin-top: 6px;
 }
 

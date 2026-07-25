@@ -55,6 +55,7 @@ interface AppUpdateStatus {
   version?: string;
   percent?: number;
   message: string;
+  automaticUpdatesEnabled: boolean;
 }
 
 interface ManagedProjectSummary {
@@ -110,6 +111,7 @@ interface Window {
     onUploadProgress: (callback: (progress: UploadProgress) => void) => () => void;
     getUpdateStatus: () => Promise<AppUpdateStatus>;
     checkForUpdates: () => Promise<AppUpdateStatus>;
+    setAutomaticUpdatesEnabled: (enabled: boolean) => Promise<AppUpdateStatus>;
     installUpdate: () => Promise<AppUpdateStatus>;
     onUpdateStatus: (callback: (status: AppUpdateStatus) => void) => () => void;
   };

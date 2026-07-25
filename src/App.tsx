@@ -344,6 +344,7 @@ const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
 const PROJECT_FILE_VERSION = 2;
 const APP_THEME_STORAGE_KEY = "minitel-blocks-theme";
 const APP_AUTO_SAVE_STORAGE_KEY = "minitel-blocks-auto-save";
+const APP_AUTO_UPDATE_STORAGE_KEY = "minitel-blocks-auto-update";
 const AUTO_SAVE_DELAY_MS = 900;
 
 function readInitialAppTheme(): AppTheme {
@@ -362,8 +363,17 @@ function readInitialAutoSaveEnabled() {
   }
 }
 
+function readInitialAutomaticUpdatesEnabled() {
+  try {
+    return window.localStorage.getItem(APP_AUTO_UPDATE_STORAGE_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
 const initialAppTheme = readInitialAppTheme();
 const initialAutoSaveEnabled = readInitialAutoSaveEnabled();
+const initialAutomaticUpdatesEnabled = readInitialAutomaticUpdatesEnabled();
 document.documentElement.dataset.theme = initialAppTheme;
 document.documentElement.style.colorScheme = initialAppTheme;
 
@@ -3138,7 +3148,7 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
   );
 }
 
-function SettingsDialog({ open, theme, autoSaveEnabled, onThemeChange, onAutoSaveChange, onClose }: { open: boolean; theme: AppTheme; autoSaveEnabled: boolean; onThemeChange: (theme: AppTheme) => void; onAutoSaveChange: (enabled: boolean) => void; onClose: () => void }) {
+function SettingsDialog({ open, theme, autoSaveEnabled, automaticUpdatesEnabled, onThemeChange, onAutoSaveChange, onAutomaticUpdatesChange, onClose }: { open: boolean; theme: AppTheme; autoSaveEnabled: boolean; automaticUpdatesEnabled: boolean; onThemeChange: (theme: AppTheme) => void; onAutoSaveChange: (enabled: boolean) => void; onAutomaticUpdatesChange: (enabled: boolean) => void; onClose: () => void }) {
   if (!open) return null;
   return (
     <div className="settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -3159,6 +3169,11 @@ function SettingsDialog({ open, theme, autoSaveEnabled, onThemeChange, onAutoSav
             <span className="settings-toggle-copy"><strong>Sauvegarde automatique</strong><small>{autoSaveEnabled ? "Activée" : "Désactivée"}</small></span>
             <span className={"settings-switch" + (autoSaveEnabled ? " active" : "")} aria-hidden="true"><i /></span>
           </button>
+          <div className="settings-section-title"><RefreshCw size={17} /><span>Mises à jour</span></div>
+          <button type="button" className="settings-toggle-row" role="switch" aria-checked={automaticUpdatesEnabled} onClick={() => onAutomaticUpdatesChange(!automaticUpdatesEnabled)}>
+            <span className="settings-toggle-copy"><strong>Mises à jour automatiques</strong><small>{automaticUpdatesEnabled ? "Activées" : "Désactivées"}</small></span>
+            <span className={"settings-switch" + (automaticUpdatesEnabled ? " active" : "")} aria-hidden="true"><i /></span>
+          </button>
         </div>
         <footer className="settings-footer"><button type="button" onClick={onClose}>Terminé</button></footer>
       </section>
@@ -3173,6 +3188,7 @@ function App() {
   const [appView, setAppView] = useState<"projects" | "studio">("projects");
   const [theme, setTheme] = useState<AppTheme>(initialAppTheme);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(initialAutoSaveEnabled);
+  const [automaticUpdatesEnabled, setAutomaticUpdatesEnabled] = useState(initialAutomaticUpdatesEnabled);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projects, setProjects] = useState<ManagedProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -3252,6 +3268,12 @@ function App() {
       window.localStorage.setItem(APP_AUTO_SAVE_STORAGE_KEY, autoSaveEnabled ? "true" : "false");
     } catch {}
   }, [autoSaveEnabled]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(APP_AUTO_UPDATE_STORAGE_KEY, automaticUpdatesEnabled ? "true" : "false");
+    } catch {}
+  }, [automaticUpdatesEnabled]);
 
   function moveDragPreview(event: { clientX: number; clientY: number }) {
     if (!event.clientX && !event.clientY) return;
@@ -3748,13 +3770,14 @@ function App() {
     const bridge = window.minitelStudio;
     if (!bridge?.getUpdateStatus || !bridge.onUpdateStatus) return undefined;
     let active = true;
-    const unsubscribe = bridge.onUpdateStatus((status) => {
-      if (active) setAppUpdate(status);
-    });
+    const applyUpdateStatus = (status: AppUpdateStatus) => {
+      if (!active) return;
+      setAppUpdate(status);
+      setAutomaticUpdatesEnabled(status.automaticUpdatesEnabled);
+    };
+    const unsubscribe = bridge.onUpdateStatus(applyUpdateStatus);
     void bridge.getUpdateStatus()
-      .then((status) => {
-        if (active) setAppUpdate(status);
-      })
+      .then(applyUpdateStatus)
       .catch(() => undefined);
     return () => {
       active = false;
@@ -4439,6 +4462,21 @@ function App() {
     }
   }
 
+  async function changeAutomaticUpdates(enabled: boolean) {
+    const previous = automaticUpdatesEnabled;
+    setAutomaticUpdatesEnabled(enabled);
+    const bridge = window.minitelStudio;
+    if (!bridge?.setAutomaticUpdatesEnabled) return;
+    try {
+      const status = await bridge.setAutomaticUpdatesEnabled(enabled);
+      setAppUpdate(status);
+      setAutomaticUpdatesEnabled(status.automaticUpdatesEnabled);
+    } catch {
+      setAutomaticUpdatesEnabled(previous);
+      flashNotice("Impossible d'enregistrer le réglage des mises à jour");
+    }
+  }
+
   async function handleAppUpdate() {
     const bridge = window.minitelStudio;
     if (!appUpdate || !bridge) return;
@@ -4506,7 +4544,7 @@ function App() {
           onDelete={deleteManagedProject}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onClose={() => setSettingsOpen(false)} />
       </>
     );
   }
@@ -4707,7 +4745,7 @@ function App() {
         </div>
       ) : null}
 
-      <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onClose={() => setSettingsOpen(false)} />
       <div className={"notice " + (notice ? "show" : "")}>{notice}</div>
     </div>
   );

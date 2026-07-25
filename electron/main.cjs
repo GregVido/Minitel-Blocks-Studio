@@ -12,6 +12,7 @@ let updateState = {
   status: isDevelopment ? "disabled" : "idle",
   currentVersion: app.getVersion(),
   message: isDevelopment ? "Mises a jour disponibles dans l'application installee." : "Verification au demarrage.",
+  automaticUpdatesEnabled: true,
 };
 let updaterConfigured = false;
 let updateReady = false;
@@ -19,11 +20,45 @@ let updatePromptOpen = false;
 let startupUpdateTimer = null;
 let updateInstallRequested = false;
 let updateInstallPreparing = false;
+let automaticUpdatesEnabled = true;
+let currentUpdateCheckAutomatic = false;
 const pendingRendererSaveRequests = new Map();
 const approvedWindowCloses = new WeakSet();
 const managedChildren = new Set();
 
 app.setAppUserModelId("fr.fifou.minitel-blocks-studio");
+
+const APP_PREFERENCES_FILE = "preferences.json";
+
+function preferencesPath() {
+  return path.join(app.getPath("userData"), APP_PREFERENCES_FILE);
+}
+
+async function readAutomaticUpdatesEnabled() {
+  try {
+    const preferences = JSON.parse(await fs.readFile(preferencesPath(), "utf8"));
+    return preferences.automaticUpdatesEnabled !== false;
+  } catch {
+    return true;
+  }
+}
+
+async function writeAutomaticUpdatesEnabled(enabled) {
+  let preferences = {};
+  try {
+    preferences = JSON.parse(await fs.readFile(preferencesPath(), "utf8"));
+  } catch {
+    // The file is created the first time a preference changes.
+  }
+  await fs.mkdir(app.getPath("userData"), { recursive: true });
+  await fs.writeFile(preferencesPath(), JSON.stringify({ ...preferences, automaticUpdatesEnabled: enabled }, null, 2) + "\n", "utf8");
+}
+
+function clearStartupUpdateTimer() {
+  if (!startupUpdateTimer) return;
+  clearTimeout(startupUpdateTimer);
+  startupUpdateTimer = null;
+}
 
 function broadcastUpdateState() {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -146,10 +181,19 @@ async function offerDownloadedUpdate() {
   }
 }
 
+function scheduleAutomaticUpdateCheck(delay = 3000) {
+  clearStartupUpdateTimer();
+  if (!automaticUpdatesEnabled || isDevelopment || process.platform !== "win32") return;
+  startupUpdateTimer = setTimeout(() => {
+    startupUpdateTimer = null;
+    void checkForAppUpdates({ automatic: true });
+  }, delay);
+}
+
 function configureAutoUpdater() {
   if (updaterConfigured || isDevelopment || process.platform !== "win32") return;
   updaterConfigured = true;
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = automaticUpdatesEnabled;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.autoRunAppAfterInstall = true;
   autoUpdater.allowPrerelease = false;
@@ -190,18 +234,20 @@ function configureAutoUpdater() {
       percent: 100,
       message: "Mise a jour prete. Clique pour redemarrer.",
     });
-    void offerDownloadedUpdate();
+    if (automaticUpdatesEnabled || !currentUpdateCheckAutomatic) void offerDownloadedUpdate();
   });
   autoUpdater.on("error", handleUpdaterError);
 
-  startupUpdateTimer = setTimeout(() => {
-    void checkForAppUpdates();
-  }, 3000);
+  scheduleAutomaticUpdateCheck();
 }
 
-async function checkForAppUpdates() {
+async function checkForAppUpdates(options = {}) {
+  const automatic = Boolean(options.automatic);
+  if (automatic && !automaticUpdatesEnabled) return { ...updateState };
   if (isDevelopment || process.platform !== "win32") return { ...updateState };
   if (!updaterConfigured) configureAutoUpdater();
+  currentUpdateCheckAutomatic = automatic;
+  autoUpdater.autoDownload = automaticUpdatesEnabled || !automatic;
   if (["checking", "available", "downloading", "installing"].includes(updateState.status)) return { ...updateState };
   setUpdateState({ status: "checking", percent: undefined, message: "Recherche d'une mise a jour..." });
   try {
@@ -210,6 +256,47 @@ async function checkForAppUpdates() {
     handleUpdaterError(error);
   }
   return { ...updateState };
+}
+
+async function setAutomaticUpdatesPreference(enabled) {
+  const previous = automaticUpdatesEnabled;
+  automaticUpdatesEnabled = Boolean(enabled);
+  try {
+    await writeAutomaticUpdatesEnabled(automaticUpdatesEnabled);
+  } catch (error) {
+    automaticUpdatesEnabled = previous;
+    throw error;
+  }
+
+  if (updaterConfigured) autoUpdater.autoDownload = automaticUpdatesEnabled;
+  if (!automaticUpdatesEnabled) {
+    clearStartupUpdateTimer();
+    const updateInProgress = ["checking", "available", "downloading", "ready", "installing"].includes(updateState.status);
+    return setUpdateState(updateInProgress
+      ? { automaticUpdatesEnabled: false }
+      : {
+          status: "disabled",
+          version: undefined,
+          percent: undefined,
+          automaticUpdatesEnabled: false,
+          message: "Mises a jour automatiques desactivees.",
+        });
+  }
+
+  const nextState = setUpdateState({
+    automaticUpdatesEnabled: true,
+    ...(updateState.status === "disabled" ? {
+      status: "idle",
+      version: undefined,
+      percent: undefined,
+      message: "Verification automatique activee.",
+    } : {}),
+  });
+  if (!isDevelopment && process.platform === "win32") {
+    if (!updaterConfigured) configureAutoUpdater();
+    scheduleAutomaticUpdateCheck(500);
+  }
+  return nextState;
 }
 
 const SUPPORTED_BOARDS = {
@@ -607,7 +694,18 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
 } else {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    automaticUpdatesEnabled = await readAutomaticUpdatesEnabled();
+    updateState = {
+      ...updateState,
+      status: isDevelopment || !automaticUpdatesEnabled ? "disabled" : "idle",
+      message: isDevelopment
+        ? "Mises a jour disponibles dans l'application installee."
+        : automaticUpdatesEnabled
+          ? "Verification au demarrage."
+          : "Mises a jour automatiques desactivees.",
+      automaticUpdatesEnabled,
+    };
     createWindow();
     configureAutoUpdater();
   });
@@ -621,7 +719,7 @@ app.on("second-instance", () => {
 });
 
 app.on("will-quit", () => {
-  if (startupUpdateTimer) clearTimeout(startupUpdateTimer);
+  clearStartupUpdateTimer();
   stopManagedChildren();
   releaseRuntimeSubst();
 });
@@ -644,6 +742,10 @@ ipcMain.on("app-save-complete", (event, payload) => {
 ipcMain.handle("get-update-status", async () => ({ ...updateState }));
 
 ipcMain.handle("check-for-updates", async () => checkForAppUpdates());
+
+ipcMain.handle("set-automatic-updates-enabled", async (_event, payload) => {
+  return setAutomaticUpdatesPreference(Boolean(payload && payload.enabled));
+});
 
 ipcMain.handle("install-update", async () => installDownloadedUpdate());
 

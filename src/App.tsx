@@ -64,6 +64,7 @@ import ProjectHub, { type NewProjectSettings } from "./project-hub";
 type BlockKind = "event" | "action" | "control" | "value";
 type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen";
 type ExprType = "number" | "boolean" | "text";
+type VariableValueType = "number" | "text";
 type RightTab = "preview" | "code" | "upload";
 type WorkspaceMode = "blocks" | "designer";
 type AppTheme = "light" | "dark";
@@ -144,6 +145,7 @@ type BlockInput = {
   compact?: boolean;
   placeholder?: string;
   secret?: boolean;
+  variableType?: VariableValueType | "any";
 };
 
 type SlotDefinition = {
@@ -185,6 +187,7 @@ type ScriptStack = {
 type VariableDef = {
   id: string;
   name: string;
+  valueType: VariableValueType;
   defaultValue: Expr;
 };
 
@@ -299,7 +302,7 @@ type PreviewState = {
   textSize: string;
   baudRate: number;
   messages: string[];
-  variables: Record<string, number>;
+  variables: Record<string, number | string>;
   colorEnabled: boolean;
 };
 
@@ -382,8 +385,10 @@ document.documentElement.style.colorScheme = initialAppTheme;
 
 const uid = () => "id-" + Math.random().toString(16).slice(2) + "-" + Date.now().toString(16);
 const num = (value: number): Expr => ({ kind: "literal", valueType: "number", value });
+const textExpr = (value: string): Expr => ({ kind: "literal", valueType: "text", value });
 const boolExpr = (value: boolean): Expr => ({ kind: "literal", valueType: "boolean", value });
 const variableExpr = (name: string): Expr => ({ kind: "variable", valueType: "number", name });
+const variableValueType = (variable: VariableDef): VariableValueType => variable.valueType === "text" ? "text" : "number";
 const binaryExpr = (op: BinaryExpr["op"], left: Expr, right: Expr): Expr => ({ kind: "binary", valueType: "number", op, left, right });
 const addExpr = (left: Expr, right: Expr): Expr => binaryExpr("+", left, right);
 const randomExpr = (from: Expr, to: Expr): Expr => ({ kind: "random", valueType: "number", from, to });
@@ -701,22 +706,26 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "control-if", title: "si", help: "Exécute les blocs internes si la condition est vraie.", kind: "control", category: "control", color: "#ff9f1c", inputs: [{ key: "condition", label: "condition", type: "condition", defaultValue: compareExpr(variableExpr("maVariable"), ">", num(0)) }], slots: [{ key: "children", label: "alors" }] },
   { id: "control-if-else", title: "si / sinon", help: "Choisit entre deux chemins.", kind: "control", category: "control", color: "#ff9f1c", inputs: [{ key: "condition", label: "condition", type: "condition", defaultValue: compareExpr(variableExpr("maVariable"), "==", num(1)) }], slots: [{ key: "children", label: "alors" }, { key: "elseChildren", label: "sinon" }] },
   { id: "control-for", title: "pour", help: "Fait évoluer une variable entre deux valeurs.", kind: "control", category: "control", color: "#ff9f1c", inputs: [
-    { key: "variable", label: "variable", type: "variable", defaultValue: "compteur" },
+    { key: "variable", label: "variable", type: "variable", defaultValue: "compteur", variableType: "number" },
     { key: "from", label: "de", type: "number", defaultValue: num(1), compact: true },
     { key: "to", label: "à", type: "number", defaultValue: num(5), compact: true },
     { key: "step", label: "pas", type: "number", defaultValue: num(1), compact: true },
   ], slots: [{ key: "children", label: "faire" }] },
 
   { id: "var-set", title: "mettre variable à", help: "Initialise ou remplace la valeur d'une variable.", kind: "action", category: "variables", color: "#f25f5c", inputs: [
-    { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable" },
+    { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable", variableType: "number" },
     { key: "value", label: "valeur", type: "number", defaultValue: num(1) },
   ] },
   { id: "var-change", title: "ajouter à variable", help: "Ajoute un nombre à une variable.", kind: "action", category: "variables", color: "#f25f5c", inputs: [
-    { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable" },
+    { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable", variableType: "number" },
     { key: "delta", label: "valeur", type: "number", defaultValue: num(1) },
   ] },
-  { id: "var-show", title: "afficher variable à", help: "Écrit la valeur d'une variable à l'écran.", kind: "action", category: "variables", color: "#f25f5c", inputs: [
-    { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable" },
+  { id: "var-set-text", title: "mettre texte à", help: "Remplace le contenu d'une variable Texte.", kind: "action", category: "variables", color: "#e75669", inputs: [
+    { key: "variable", label: "variable", type: "variable", defaultValue: "texte", variableType: "text" },
+    { key: "text", label: "texte", type: "text", defaultValue: "Bonjour", placeholder: "Texte à mémoriser" },
+  ] },
+  { id: "var-show", title: "afficher variable à", help: "Écrit la valeur d'une variable Nombre ou Texte à l'écran.", kind: "action", category: "variables", color: "#f25f5c", inputs: [
+    { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable", variableType: "any" },
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
     { key: "row", label: "ligne", type: "number", defaultValue: num(20), min: 1, max: 24, compact: true },
   ] },
@@ -743,6 +752,24 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
+  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON depuis une URL et la range dans une variable Texte.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
+    { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/todos/1", placeholder: "https://api.exemple.fr/donnees" },
+    { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+  ] },
+  { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "network", color: "#138c7d", inputs: [
+    { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+    { key: "path", label: "clé", type: "text", defaultValue: "title", placeholder: "utilisateur.nom" },
+    { key: "target", label: "texte dans", type: "variable", defaultValue: "texte", variableType: "text" },
+  ] },
+  { id: "json-read-number", title: "lire nombre du JSON", help: "Lit une valeur numérique dans le JSON et la range dans une variable Nombre.", kind: "action", category: "network", color: "#138c7d", inputs: [
+    { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+    { key: "path", label: "clé", type: "text", defaultValue: "id", placeholder: "mesures.0.valeur" },
+    { key: "target", label: "nombre dans", type: "variable", defaultValue: "maVariable", variableType: "number" },
+  ] },
+  { id: "json-if-has", title: "si le JSON contient", help: "Exécute les blocs internes seulement si la clé existe dans la réponse JSON.", kind: "control", category: "network", color: "#138c7d", inputs: [
+    { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+    { key: "path", label: "clé", type: "text", defaultValue: "title", placeholder: "utilisateur.nom" },
+  ], slots: [{ key: "children", label: "alors" }] },
 
   { id: "graphic-mode", title: "mode mosaïque", help: "Active les caractères graphiques du Minitel.", kind: "action", category: "graphics", color: "#16a6b6" },
   { id: "text-mode", title: "mode texte", help: "Revient aux caractères texte classiques.", kind: "action", category: "graphics", color: "#16a6b6" },
@@ -805,6 +832,13 @@ function normalizeImportedNumberExpr(value: unknown, fallback: Expr = num(0)): E
       normalizeImportedNumberExpr(record.to, num(10)),
     );
   }
+  return cloneValue(fallback);
+}
+
+function normalizeImportedTextExpr(value: unknown, fallback: Expr = textExpr("")): Expr {
+  const record = importedRecord(value);
+  if (record?.kind === "literal") return textExpr(String(record.value ?? "").slice(0, 4096));
+  if (["string", "number", "boolean"].includes(typeof value)) return textExpr(String(value).slice(0, 4096));
   return cloneValue(fallback);
 }
 
@@ -914,7 +948,13 @@ function normalizeImportedVariables(value: unknown): VariableDef[] {
       suffix += 1;
     }
     usedNames.add(name);
-    return [{ id: uid(), name, defaultValue: normalizeImportedNumberExpr(source.defaultValue) }];
+    const valueType: VariableValueType = source.valueType === "text" ? "text" : "number";
+    return [{
+      id: uid(),
+      name,
+      valueType,
+      defaultValue: valueType === "text" ? normalizeImportedTextExpr(source.defaultValue) : normalizeImportedNumberExpr(source.defaultValue),
+    }];
   });
   return variables.length > 0 ? variables : createDefaultVariables();
 }
@@ -1093,8 +1133,10 @@ const previewColors: Record<string, string> = {
 
 function createDefaultVariables(): VariableDef[] {
   return [
-    { id: uid(), name: "maVariable", defaultValue: num(2) },
-    { id: uid(), name: "compteur", defaultValue: num(0) },
+    { id: uid(), name: "maVariable", valueType: "number", defaultValue: num(2) },
+    { id: uid(), name: "compteur", valueType: "number", defaultValue: num(0) },
+    { id: uid(), name: "reponseJson", valueType: "text", defaultValue: textExpr("{}") },
+    { id: uid(), name: "texte", valueType: "text", defaultValue: textExpr("") },
   ];
 }
 
@@ -1272,7 +1314,7 @@ const projectExamples: ProjectExample[] = [
     name: "Compteur animé",
     description: "Une variable évolue automatiquement et sa valeur apparaît à l'écran.",
     accent: "#ff9f1c",
-    create: () => ({ stacks: createCounterStacks(), variables: [{ id: uid(), name: "compteur", defaultValue: num(0) }], screenConfig: createDefaultScreenConfig(), ...createScreenState() }),
+    create: () => ({ stacks: createCounterStacks(), variables: [{ id: uid(), name: "compteur", valueType: "number", defaultValue: num(0) }], screenConfig: createDefaultScreenConfig(), ...createScreenState() }),
   },
   {
     id: "keyboard",
@@ -1488,13 +1530,15 @@ function exprCode(value: InputValue | undefined, fallback: Expr = num(0)): strin
   }
 }
 
-function exprPreviewNumber(value: InputValue | undefined, variables: Record<string, number>, fallback = 0): number {
+function exprPreviewNumber(value: InputValue | undefined, variables: Record<string, number | string>, fallback = 0): number {
   const expr = isExpr(value) ? value : typeof value === "number" ? num(value) : num(fallback);
   switch (expr.kind) {
     case "literal":
       return Number(expr.value) || 0;
-    case "variable":
-      return variables[expr.name] ?? 0;
+    case "variable": {
+      const numericValue = Number(variables[expr.name]);
+      return Number.isFinite(numericValue) ? numericValue : 0;
+    }
     case "binary": {
       const left = exprPreviewNumber(expr.left, variables, fallback);
       const right = exprPreviewNumber(expr.right, variables, fallback);
@@ -1518,7 +1562,7 @@ function exprPreviewNumber(value: InputValue | undefined, variables: Record<stri
   }
 }
 
-function exprPreviewBoolean(value: InputValue | undefined, variables: Record<string, number>): boolean {
+function exprPreviewBoolean(value: InputValue | undefined, variables: Record<string, number | string>): boolean {
   const expr = isExpr(value) ? value : boolExpr(Boolean(value));
   if (expr.kind === "literal") {
     return Boolean(expr.value);
@@ -1589,6 +1633,68 @@ function collectExprVariables(value: InputValue | undefined, target: Set<string>
   }
 }
 
+function replaceNumberVariableReference(value: InputValue, variableName: string, replacement: Expr): InputValue {
+  if (!isExpr(value)) return value;
+  if (value.kind === "variable") return value.name === variableName ? cloneValue(replacement) : value;
+  if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
+    return {
+      ...value,
+      left: replaceNumberVariableReference(value.left, variableName, replacement) as Expr,
+      right: replaceNumberVariableReference(value.right, variableName, replacement) as Expr,
+    };
+  }
+  if (value.kind === "random") {
+    return {
+      ...value,
+      from: replaceNumberVariableReference(value.from, variableName, replacement) as Expr,
+      to: replaceNumberVariableReference(value.to, variableName, replacement) as Expr,
+    };
+  }
+  if (value.kind === "not") {
+    return { ...value, operand: replaceNumberVariableReference(value.operand, variableName, replacement) as Expr };
+  }
+  return value;
+}
+
+function repairVariableValues(definition: BlockDefinition | undefined, values: Values, variables: VariableDef[], previousName: string, numberReplacement: Expr) {
+  const nextValues = Object.fromEntries(Object.entries(values).map(([key, value]) => {
+    const input = definition?.inputs?.find((item) => item.key === key);
+    if (input?.type === "variable" && value === previousName) {
+      const expectedType = input.variableType ?? "number";
+      const compatibleVariables = expectedType === "any"
+        ? variables
+        : variables.filter((variable) => variableValueType(variable) === expectedType);
+      const currentVariable = variables.find((variable) => variable.name === previousName);
+      const remainsCompatible = currentVariable && (expectedType === "any" || variableValueType(currentVariable) === expectedType);
+      return [key, remainsCompatible ? previousName : compatibleVariables[0]?.name ?? ""];
+    }
+    return [key, replaceNumberVariableReference(value, previousName, numberReplacement)];
+  }));
+  return nextValues as Values;
+}
+
+function repairVariableReferencesInBlocks(blocks: ProgramBlock[], variables: VariableDef[], previousName: string, numberReplacement: Expr): ProgramBlock[] {
+  return blocks.map((block) => ({
+    ...block,
+    values: repairVariableValues(blockById[block.definitionId], block.values, variables, previousName, numberReplacement),
+    children: block.children ? repairVariableReferencesInBlocks(block.children, variables, previousName, numberReplacement) : undefined,
+    elseChildren: block.elseChildren ? repairVariableReferencesInBlocks(block.elseChildren, variables, previousName, numberReplacement) : undefined,
+  }));
+}
+
+function repairVariableReferencesInStacks(stacks: ScriptStack[], variables: VariableDef[], previousName: string) {
+  const replacementVariable = variables.find((variable) => variableValueType(variable) === "number");
+  const numberReplacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
+  return stacks.map((stack) => ({
+    ...stack,
+    event: {
+      ...stack.event,
+      values: repairVariableValues(blockById[stack.event.definitionId], stack.event.values, variables, previousName, numberReplacement),
+    },
+    blocks: repairVariableReferencesInBlocks(stack.blocks, variables, previousName, numberReplacement),
+  }));
+}
+
 function walkBlocks(blocks: ProgramBlock[], visit: (block: ProgramBlock) => void) {
   blocks.forEach((block) => {
     visit(block);
@@ -1607,21 +1713,33 @@ function projectUsesBlock(stacks: ScriptStack[], definitionId: string) {
   });
 }
 
-function collectVariableNames(stacks: ScriptStack[], variables: VariableDef[]) {
-  const names = new Set<string>();
-  variables.forEach((variable) => names.add(variable.name));
+function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
+  const types = new Map<string, VariableValueType>();
+  const addVariable = (name: string, valueType: VariableValueType) => {
+    const cleanName = name.trim();
+    if (cleanName && !types.has(cleanName)) types.set(cleanName, valueType);
+  };
+  const collectNumberExpressions = (values: Iterable<InputValue>) => {
+    const names = new Set<string>();
+    Array.from(values).forEach((value) => collectExprVariables(value, names));
+    names.forEach((name) => addVariable(name, "number"));
+  };
+
+  variables.forEach((variable) => addVariable(variable.name, variableValueType(variable)));
   stacks.forEach((stack) => {
-    Object.values(stack.event.values).forEach((value) => collectExprVariables(value, names));
+    collectNumberExpressions(Object.values(stack.event.values));
     walkBlocks(stack.blocks, (block) => {
+      const definition = blockById[block.definitionId];
       Object.entries(block.values).forEach(([key, value]) => {
-        if (key === "variable" && typeof value === "string") {
-          names.add(value);
+        const input = definition?.inputs?.find((item) => item.key === key);
+        if (input?.type === "variable" && typeof value === "string") {
+          addVariable(value, input.variableType === "text" ? "text" : "number");
         }
-        collectExprVariables(value, names);
+        collectNumberExpressions([value]);
       });
     });
   });
-  return Array.from(names).filter(Boolean);
+  return Array.from(types.entries());
 }
 
 function pushLine(lines: string[], indent: number, line: string) {
@@ -1687,6 +1805,9 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         break;
       case "var-change":
         pushLine(lines, indent, sanitizeIdentifier(textValue(values.variable, "maVariable")) + " += (int)(" + exprCode(values.delta, num(1)) + ");");
+        break;
+      case "var-set-text":
+        pushLine(lines, indent, sanitizeIdentifier(textValue(values.variable, "texte")) + " = " + cppString(values.text) + ";");
         break;
       case "var-show":
         pushLine(lines, indent, "minitel.moveTo((uint8_t)(" + exprCode(values.column, num(2)) + "), (uint8_t)(" + exprCode(values.row, num(20)) + "));");
@@ -1757,6 +1878,20 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "http-get-json":
+        pushLine(lines, indent, sanitizeIdentifier(textValue(values.target, "reponseJson")) + " = mbsHttpGetJson(" + cppString(values.url) + ");");
+        break;
+      case "json-read-text":
+        pushLine(lines, indent, "mbsJsonReadText(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "texte")) + ");");
+        break;
+      case "json-read-number":
+        pushLine(lines, indent, "mbsJsonReadNumber(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "maVariable")) + ");");
+        break;
+      case "json-if-has":
+        pushLine(lines, indent, "if (mbsJsonHas(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ")) {");
+        appendBlockCode(lines, block.children ?? [], indent + 2, variables, context);
+        pushLine(lines, indent, "}");
+        break;
       case "graphic-mode":
         pushLine(lines, indent, "minitel.graphicMode();");
         break;
@@ -1851,9 +1986,20 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
-  const variableNames = collectVariableNames(stacks, variables);
-  const usesWifi = projectUsesBlock(stacks, "wifi-connect");
-  const lines: string[] = ["#include <Arduino.h>", ...(usesWifi ? ["#include <WiFi.h>"] : []), "#include <MinitelESP32.h>", "", "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows, "MinitelESP32 minitel(Serial2, 16, 17, 1200);"];
+  const variableTypes = collectVariableTypes(stacks, variables);
+  const usesHttp = projectUsesBlock(stacks, "http-get-json");
+  const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
+  const usesWifi = usesHttp || projectUsesBlock(stacks, "wifi-connect");
+  const lines: string[] = [
+    "#include <Arduino.h>",
+    ...(usesWifi ? ["#include <WiFi.h>"] : []),
+    ...(usesHttp ? ["#include <HTTPClient.h>"] : []),
+    ...(usesJson ? ['#include "cJSON.h"'] : []),
+    "#include <MinitelESP32.h>",
+    "",
+    "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows,
+    "MinitelESP32 minitel(Serial2, 16, 17, 1200);",
+  ];
 
   lines.push(
     "",
@@ -1864,11 +2010,115 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
     "}",
   );
 
-  if (variableNames.length > 0) {
+  if (usesJson) {
+    lines.push(
+      "",
+      "cJSON *mbsJsonItemAtPath(cJSON *root, const String &path) {",
+      "  if (root == nullptr) return nullptr;",
+      "  if (path.length() == 0) return root;",
+      "  cJSON *current = root;",
+      "  int start = 0;",
+      "  while (start <= (int)path.length()) {",
+      "    const int separator = path.indexOf('.', start);",
+      "    String segment = separator < 0 ? path.substring(start) : path.substring(start, separator);",
+      "    segment.trim();",
+      "    if (segment.length() == 0) return nullptr;",
+      "    if (cJSON_IsArray(current)) {",
+      "      char *end = nullptr;",
+      "      const long index = strtol(segment.c_str(), &end, 10);",
+      "      if (end == segment.c_str() || *end != '\\0' || index < 0) return nullptr;",
+      "      current = cJSON_GetArrayItem(current, (int)index);",
+      "    } else if (cJSON_IsObject(current)) {",
+      "      current = cJSON_GetObjectItemCaseSensitive(current, segment.c_str());",
+      "    } else {",
+      "      return nullptr;",
+      "    }",
+      "    if (current == nullptr || separator < 0) return current;",
+      "    start = separator + 1;",
+      "  }",
+      "  return current;",
+      "}",
+      "",
+      "bool mbsJsonReadText(const String &json, const String &path, String &output) {",
+      "  cJSON *document = cJSON_Parse(json.c_str());",
+      "  output = String();",
+      "  if (document == nullptr) return false;",
+      "  cJSON *item = mbsJsonItemAtPath(document, path);",
+      "  bool found = item != nullptr;",
+      "  if (cJSON_IsString(item) && item->valuestring != nullptr) {",
+      "    output = item->valuestring;",
+      "  } else if (item != nullptr) {",
+      "    char *encoded = cJSON_PrintUnformatted(item);",
+      "    if (encoded != nullptr) {",
+      "      output = encoded;",
+      "      cJSON_free(encoded);",
+      "    }",
+      "  }",
+      "  cJSON_Delete(document);",
+      "  return found;",
+      "}",
+      "",
+      "bool mbsJsonReadNumber(const String &json, const String &path, int &output) {",
+      "  output = 0;",
+      "  cJSON *document = cJSON_Parse(json.c_str());",
+      "  if (document == nullptr) return false;",
+      "  cJSON *item = mbsJsonItemAtPath(document, path);",
+      "  bool found = false;",
+      "  if (cJSON_IsNumber(item)) {",
+      "    output = (int)item->valuedouble;",
+      "    found = true;",
+      "  } else if (cJSON_IsBool(item)) {",
+      "    output = cJSON_IsTrue(item) ? 1 : 0;",
+      "    found = true;",
+      "  } else if (cJSON_IsString(item) && item->valuestring != nullptr) {",
+      "    output = String(item->valuestring).toInt();",
+      "    found = true;",
+      "  }",
+      "  cJSON_Delete(document);",
+      "  return found;",
+      "}",
+      "",
+      "bool mbsJsonHas(const String &json, const String &path) {",
+      "  cJSON *document = cJSON_Parse(json.c_str());",
+      "  if (document == nullptr) return false;",
+      "  const bool found = mbsJsonItemAtPath(document, path) != nullptr;",
+      "  cJSON_Delete(document);",
+      "  return found;",
+      "}",
+    );
+  }
+
+  if (usesHttp) {
+    lines.push(
+      "",
+      "String mbsHttpGetJson(const String &url) {",
+      "  if (WiFi.status() != WL_CONNECTED || url.length() == 0) return String();",
+      "  HTTPClient http;",
+      "  http.setTimeout(10000);",
+      "  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);",
+      "  if (!http.begin(url)) return String();",
+      "  http.addHeader(\"Accept\", \"application/json\");",
+      "  const int status = http.GET();",
+      "  String response = status >= 200 && status < 300 ? http.getString() : String();",
+      "  http.end();",
+      "  if (response.length() == 0) return String();",
+      "  cJSON *document = cJSON_Parse(response.c_str());",
+      "  if (document == nullptr) return String();",
+      "  cJSON_Delete(document);",
+      "  return response;",
+      "}",
+    );
+  }
+
+  if (variableTypes.length > 0) {
     lines.push("");
-    variableNames.forEach((name) => {
+    variableTypes.forEach(([name, valueType]) => {
       const variable = variables.find((item) => item.name === name);
-      lines.push("int " + sanitizeIdentifier(name) + " = (int)(" + exprCode(variable?.defaultValue, num(0)) + ");");
+      if (valueType === "text") {
+        lines.push("String " + sanitizeIdentifier(name) + " = " + exprCode(variable?.defaultValue, textExpr("")) + ";");
+      } else {
+        lines.push("int " + sanitizeIdentifier(name) + " = (int)(" + exprCode(variable?.defaultValue, num(0)) + ");");
+      }
     });
   }
 
@@ -1905,9 +2155,11 @@ function emptyPreviewCells(columns: number, rows: number) {
 }
 
 function createPreviewState(variables: VariableDef[], screenConfig: MinitelScreenConfig): PreviewState {
-  const values: Record<string, number> = {};
+  const values: Record<string, number | string> = {};
   variables.forEach((variable) => {
-    values[variable.name] = exprPreviewNumber(variable.defaultValue, values, 0);
+    values[variable.name] = variableValueType(variable) === "text"
+      ? variable.defaultValue.kind === "literal" ? String(variable.defaultValue.value) : ""
+      : exprPreviewNumber(variable.defaultValue, values, 0);
   });
   return { cells: emptyPreviewCells(screenConfig.columns, screenConfig.rows), columns: screenConfig.columns, rows: screenConfig.rows, cursorColumn: 1, cursorRow: 1, fg: previewColors.White, bg: previewColors.Black, textSize: "Normal", baudRate: 1200, messages: [], variables: values, colorEnabled: screenConfig.colorEnabled };
 }
@@ -1949,6 +2201,38 @@ function writePreviewText(state: PreviewState, text: string) {
       state.cursorColumn += 1;
     }
   }
+}
+
+function previewJsonPath(json: string, path: string): { found: boolean; value?: unknown } {
+  try {
+    let current: unknown = JSON.parse(json);
+    const segments = path.replace(/\[(\d+)\]/g, ".$1").split(".").map((segment) => segment.trim()).filter(Boolean);
+    for (const segment of segments) {
+      if (Array.isArray(current)) {
+        const index = Number(segment);
+        if (!Number.isInteger(index) || index < 0 || index >= current.length) return { found: false };
+        current = current[index];
+      } else if (current !== null && typeof current === "object" && Object.prototype.hasOwnProperty.call(current, segment)) {
+        current = (current as Record<string, unknown>)[segment];
+      } else {
+        return { found: false };
+      }
+    }
+    return { found: true, value: current };
+  } catch {
+    return { found: false };
+  }
+}
+
+function previewJsonText(value: unknown) {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function compactPreviewVariable(value: number | string) {
+  const text = String(value);
+  return text.length > 56 ? text.slice(0, 53) + "..." : text;
 }
 
 function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], depth = 0) {
@@ -2027,8 +2311,14 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         break;
       case "var-change": {
         const name = textValue(values.variable, "maVariable");
-        state.variables[name] = (state.variables[name] ?? 0) + exprPreviewNumber(values.delta, state.variables, 1);
+        state.variables[name] = Number(state.variables[name] ?? 0) + exprPreviewNumber(values.delta, state.variables, 1);
         state.messages.push(name + " = " + state.variables[name]);
+        break;
+      }
+      case "var-set-text": {
+        const name = textValue(values.variable, "texte");
+        state.variables[name] = textValue(values.text, "");
+        state.messages.push(name + " = « " + state.variables[name] + " »");
         break;
       }
       case "var-show":
@@ -2077,6 +2367,36 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "wifi-connect": {
         const ssid = textValue(values.ssid, "");
         state.messages.push(ssid ? "Wi-Fi : connexion à " + ssid + " (simulation)" : "Wi-Fi : SSID manquant");
+        break;
+      }
+      case "http-get-json": {
+        const target = textValue(values.target, "reponseJson");
+        state.variables[target] = '{"simulation":true,"title":"Réponse GET simulée","id":1,"items":[{"name":"Minitel"}]}';
+        state.messages.push("GET JSON simulé → " + target);
+        break;
+      }
+      case "json-read-text": {
+        const source = String(state.variables[textValue(values.source, "reponseJson")] ?? "");
+        const result = previewJsonPath(source, textValue(values.path, ""));
+        const target = textValue(values.target, "texte");
+        state.variables[target] = result.found ? previewJsonText(result.value) : "";
+        state.messages.push(result.found ? "JSON texte → " + target : "Clé JSON introuvable");
+        break;
+      }
+      case "json-read-number": {
+        const source = String(state.variables[textValue(values.source, "reponseJson")] ?? "");
+        const result = previewJsonPath(source, textValue(values.path, ""));
+        const target = textValue(values.target, "maVariable");
+        const numericValue = Number(result.value);
+        state.variables[target] = result.found && Number.isFinite(numericValue) ? Math.trunc(numericValue) : 0;
+        state.messages.push(result.found && Number.isFinite(numericValue) ? "JSON nombre → " + target : "Nombre JSON introuvable");
+        break;
+      }
+      case "json-if-has": {
+        const source = String(state.variables[textValue(values.source, "reponseJson")] ?? "");
+        if (previewJsonPath(source, textValue(values.path, "")).found) {
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
+        }
         break;
       }
       case "graphic-mode":
@@ -2294,7 +2614,8 @@ type BooleanExpression = LiteralExpr | CompareExpr | LogicalExpr | NotExpr;
 
 function booleanExpression(value: InputValue | undefined, variables: VariableDef[]): BooleanExpression {
   if (isExpr(value) && value.valueType === "boolean") return value as BooleanExpression;
-  return compareExpr(variableExpr(variables[0]?.name ?? "maVariable"), ">", num(0)) as CompareExpr;
+  const firstNumberVariable = variables.find((variable) => variableValueType(variable) === "number");
+  return compareExpr(variableExpr(firstNumberVariable?.name ?? "maVariable"), ">", num(0)) as CompareExpr;
 }
 
 function replaceExprAtPath(root: Expr, path: ExpressionPathPart[], replacement: Expr): Expr {
@@ -2428,6 +2749,7 @@ function NumberExpressionNode({
   dropLocation?: ExpressionDropLocation;
 }) {
   const expr = numberExpression(value);
+  const numberVariables = variables.filter((variable) => variableValueType(variable) === "number");
   const mode: NumberExpressionMode = expr.kind === "binary"
     ? "binary"
     : expr.kind === "random"
@@ -2442,7 +2764,7 @@ function NumberExpressionNode({
 
   const changeMode = (nextMode: NumberExpressionMode) => {
     if (nextMode === "variable") {
-      onChange(variableExpr(variables[0]?.name ?? "maVariable"));
+      onChange(numberVariables.length > 0 ? variableExpr(numberVariables[0].name) : num(0));
     } else if (nextMode === "binary") {
       onChange(binaryExpr("+", cloneValue(expr), num(0)));
     } else if (nextMode === "random") {
@@ -2492,8 +2814,9 @@ function NumberExpressionNode({
       ) : (
         <>
           {mode === "variable" && expr.kind === "variable" ? (
-            <select className="expression-variable-select" value={expr.name} aria-label="Variable" onChange={(event) => onChange({ ...expr, name: event.target.value })}>
-              {variables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+            <select className="expression-variable-select" value={numberVariables.some((variable) => variable.name === expr.name) ? expr.name : numberVariables[0]?.name ?? ""} aria-label="Variable Nombre" onChange={(event) => onChange({ ...expr, name: event.target.value })} disabled={numberVariables.length === 0}>
+              {numberVariables.length === 0 ? <option value="">Aucune variable Nombre</option> : null}
+              {numberVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
             </select>
           ) : null}
 
@@ -2696,11 +3019,21 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
   }
 
   if (input.type === "variable") {
+    const expectedType = input.variableType ?? "number";
+    const compatibleVariables = expectedType === "any"
+      ? variables
+      : variables.filter((variable) => variableValueType(variable) === expectedType);
+    const requestedName = String(actualValue);
+    const selectedName = compatibleVariables.some((variable) => variable.name === requestedName)
+      ? requestedName
+      : compatibleVariables[0]?.name ?? "";
+    const emptyLabel = expectedType === "text" ? "Crée une variable Texte" : "Crée une variable Nombre";
     return (
       <label className="block-control variable-control" onMouseDown={stopDrag}>
         <span>{input.label}</span>
-        <select value={String(actualValue)} onChange={(event) => onChange(event.target.value)}>
-          {variables.map((variable) => (
+        <select value={selectedName} onChange={(event) => onChange(event.target.value)} disabled={compatibleVariables.length === 0}>
+          {compatibleVariables.length === 0 ? <option value="">{emptyLabel}</option> : null}
+          {compatibleVariables.map((variable) => (
             <option value={variable.name} key={variable.id}>{variable.name}</option>
           ))}
         </select>
@@ -3178,13 +3511,37 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
         <span>Variables</span>
         <button type="button" onClick={onAdd} title="Ajouter une variable"><Plus size={15} /></button>
       </div>
-      {variables.map((variable) => (
-        <div className="variable-card" key={variable.id}>
-          <input value={variable.name} onChange={(event) => onChange(variable.id, { name: event.target.value })} />
-          <NumberExpressionEditor value={variable.defaultValue} variables={variables} expressionOwner={{ owner: "variable", variableId: variable.id }} onChange={(value) => onChange(variable.id, { defaultValue: value })} />
-          <button type="button" onClick={() => onRemove(variable.id)} title="Supprimer"><Trash2 size={14} /></button>
-        </div>
-      ))}
+      {variables.map((variable) => {
+        const valueType = variableValueType(variable);
+        const textDefault = variable.defaultValue.kind === "literal" ? String(variable.defaultValue.value ?? "") : "";
+        return (
+          <div className={"variable-card is-" + valueType} key={variable.id}>
+            <div className="variable-card-heading">
+              <input aria-label="Nom de la variable" value={variable.name} onChange={(event) => onChange(variable.id, { name: event.target.value })} />
+              <select
+                aria-label={"Type de " + variable.name}
+                value={valueType}
+                onChange={(event) => {
+                  const nextType = event.target.value as VariableValueType;
+                  onChange(variable.id, { valueType: nextType, defaultValue: nextType === "text" ? textExpr("") : num(0) });
+                }}
+              >
+                <option value="number">Nombre</option>
+                <option value="text">Texte</option>
+              </select>
+            </div>
+            <div className="variable-default-value">
+              <span className="variable-default-label">Départ</span>
+              {valueType === "text" ? (
+                <input className="variable-text-default" type="text" value={textDefault} placeholder="Texte vide" onChange={(event) => onChange(variable.id, { defaultValue: textExpr(event.target.value) })} />
+              ) : (
+                <NumberExpressionEditor value={variable.defaultValue} variables={variables} expressionOwner={{ owner: "variable", variableId: variable.id }} onChange={(value) => onChange(variable.id, { defaultValue: value })} />
+              )}
+            </div>
+            <button type="button" onClick={() => onRemove(variable.id)} title="Supprimer"><Trash2 size={14} /></button>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3853,6 +4210,16 @@ function App() {
   function makeProjectBlock(definitionId: string) {
     const block = makeBlock(definitionId);
     if (definitionId === "draw-screen") block.values.screen = activeScreen?.id ?? screens[0]?.id ?? "";
+    blockById[definitionId]?.inputs?.forEach((input) => {
+      if (input.type !== "variable") return;
+      const compatibleVariables = input.variableType === "any"
+        ? variables
+        : variables.filter((variable) => variableValueType(variable) === (input.variableType ?? "number"));
+      const requestedName = textValue(block.values[input.key], "");
+      if (!compatibleVariables.some((variable) => variable.name === requestedName) && compatibleVariables[0]) {
+        block.values[input.key] = compatibleVariables[0].name;
+      }
+    });
     return block;
   }
 
@@ -4173,21 +4540,51 @@ function App() {
 
   function addVariable() {
     pushHistory();
-    setVariables((current) => [...current, { id: uid(), name: "variable" + (current.length + 1), defaultValue: num(0) }]);
+    setVariables((current) => [...current, { id: uid(), name: "variable" + (current.length + 1), valueType: "number", defaultValue: num(0) }]);
   }
 
   function changeVariable(id: string, patch: Partial<VariableDef>) {
+    const currentVariable = variables.find((variable) => variable.id === id);
+    if (!currentVariable) return;
+    const previousType = variableValueType(currentVariable);
+    const nextType = patch.valueType ?? previousType;
+    if (nextType !== previousType && variables.filter((variable) => variableValueType(variable) === previousType).length <= 1) {
+      flashNotice("Garde au moins une variable " + (previousType === "text" ? "Texte" : "Nombre"));
+      return;
+    }
+
     pushHistory();
-    setVariables((current) => current.map((variable) => (variable.id === id ? { ...variable, ...patch } : variable)));
+    const nextVariables = variables.map((variable) => (variable.id === id ? { ...variable, ...patch } : variable));
+    if (nextType !== previousType) {
+      const replacementVariable = nextVariables.find((variable) => variableValueType(variable) === "number");
+      const replacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
+      setVariables(nextVariables.map((variable) => ({
+        ...variable,
+        defaultValue: replaceNumberVariableReference(variable.defaultValue, currentVariable.name, replacement) as Expr,
+      })));
+      setStacks((current) => repairVariableReferencesInStacks(current, nextVariables, currentVariable.name));
+      return;
+    }
+    setVariables(nextVariables);
   }
 
   function removeVariable(id: string) {
-    if (variables.length <= 1) {
-      flashNotice("Garde au moins une variable");
+    const removedVariable = variables.find((variable) => variable.id === id);
+    if (!removedVariable) return;
+    const removedType = variableValueType(removedVariable);
+    if (variables.filter((variable) => variableValueType(variable) === removedType).length <= 1) {
+      flashNotice("Garde au moins une variable " + (removedType === "text" ? "Texte" : "Nombre"));
       return;
     }
     pushHistory();
-    setVariables((current) => current.filter((variable) => variable.id !== id));
+    const nextVariables = variables.filter((variable) => variable.id !== id);
+    const replacementVariable = nextVariables.find((variable) => variableValueType(variable) === "number");
+    const replacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
+    setVariables(nextVariables.map((variable) => ({
+      ...variable,
+      defaultValue: replaceNumberVariableReference(variable.defaultValue, removedVariable.name, replacement) as Expr,
+    })));
+    setStacks((current) => repairVariableReferencesInStacks(current, nextVariables, removedVariable.name));
   }
 
 
@@ -4713,7 +5110,7 @@ function App() {
                 </div>
               </div>
               <div className="event-strip">{preview.messages.slice(-6).map((message, index) => <span key={message + index}>{message}</span>)}</div>
-              <div className="sim-stats"><span className="baud-stat">Débit : {preview.baudRate} bauds</span>{Object.entries(preview.variables).map(([name, value]) => <span key={name}>{name}: {value}</span>)}</div>
+              <div className="sim-stats"><span className="baud-stat">Débit : {preview.baudRate} bauds</span>{Object.entries(preview.variables).map(([name, value]) => <span key={name} title={String(value)}>{name}: {compactPreviewVariable(value)}</span>)}</div>
             </div>
           ) : null}
 

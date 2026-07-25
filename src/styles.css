@@ -1355,19 +1355,73 @@ button {
 
 .variable-card {
   display: grid;
-  grid-template-columns: minmax(74px, 1fr) minmax(120px, 1.8fr) 30px;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-rows: auto auto;
+  gap: 7px;
   align-items: center;
+  padding: 7px;
+  border: 1px solid #e2e8f1;
+  border-left: 3px solid #f25f5c;
+  border-radius: 8px;
+  background: #fbfcfe;
 }
 
-.variable-card > input {
+.variable-card.is-text {
+  border-left-color: #8f5cf7;
+}
+
+.variable-card-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.variable-card-heading input,
+.variable-card-heading select,
+.variable-text-default {
   min-width: 0;
   height: 32px;
   border: 1px solid #dce4ef;
-  border-radius: 8px;
+  border-radius: 7px;
   padding: 0 8px;
-  font-weight: 800;
   color: #172033;
+  background: #ffffff;
+  font-weight: 800;
+}
+
+.variable-card-heading input {
+  font-size: 11px;
+}
+
+.variable-card-heading select {
+  width: 100%;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.variable-default-value {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.variable-default-label {
+  flex: 0 0 auto;
+  color: #708097;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.variable-text-default {
+  width: 100%;
+}
+
+.variable-card > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
 }
 
 .upload-panel {
@@ -1507,7 +1561,7 @@ button {
 
 @media (max-width: 860px) {
   .variable-card {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 30px;
   }
 
   .upload-form label {

@@ -420,7 +420,7 @@ textarea:focus-visible {
 }
 
 .variable-card {
-  grid-template-columns: minmax(70px, 1fr) minmax(0, 1.2fr) 30px;
+  grid-template-columns: minmax(0, 1fr) 30px;
 }
 
 .workspace-panel {

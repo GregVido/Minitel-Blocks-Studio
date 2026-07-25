@@ -306,6 +306,14 @@ type PreviewState = {
   colorEnabled: boolean;
 };
 
+type SimulationHttpState = {
+  status: "loading" | "success" | "error";
+  body?: string;
+  statusCode?: number;
+  resolvedUrl?: string;
+  error?: string;
+};
+
 type UploadResult = {
   ok: boolean;
   output: string;
@@ -441,6 +449,75 @@ function textValue(value: InputValue | undefined, fallback: string) {
     return fallback;
   }
   return String(value);
+}
+
+function collectSimulationHttpUrls(stacks: ScriptStack[], eventDefinitionIds?: string[]) {
+  const urls = new Set<string>();
+  const allowedEvents = eventDefinitionIds ? new Set(eventDefinitionIds) : null;
+  const visit = (blocks: ProgramBlock[]) => {
+    blocks.forEach((block) => {
+      if (block.definitionId === "http-get-json") {
+        const url = textValue(block.values.url, "").trim();
+        if (url) urls.add(url);
+      }
+      visit(block.children ?? []);
+      visit(block.elseChildren ?? []);
+    });
+  };
+  stacks.forEach((stack) => {
+    if (!allowedEvents || allowedEvents.has(stack.event.definitionId)) visit(stack.blocks);
+  });
+  return Array.from(urls);
+}
+
+async function requestSimulationJson(url: string): Promise<SimulationHttpGetResult> {
+  try {
+    if (window.minitelStudio?.fetchJsonForSimulation) {
+      return await window.minitelStudio.fetchJsonForSimulation(url);
+    }
+
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+      return { ok: false, url, error: "Seules les URL HTTP et HTTPS sont acceptées." };
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(parsedUrl.toString(), {
+        method: "GET",
+        redirect: "follow",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      const declaredLength = Number(response.headers.get("content-length") || 0);
+      if (Number.isFinite(declaredLength) && declaredLength > 2 * 1024 * 1024) {
+        return { ok: false, url: response.url || url, status: response.status, error: "La réponse JSON dépasse la limite de 2 Mo." };
+      }
+      const body = await response.text();
+      if (new TextEncoder().encode(body).byteLength > 2 * 1024 * 1024) {
+        return { ok: false, url: response.url || url, status: response.status, error: "La réponse JSON dépasse la limite de 2 Mo." };
+      }
+      if (!response.ok) {
+        return { ok: false, url: response.url || url, status: response.status, error: "Le serveur a répondu avec le code HTTP " + response.status + "." };
+      }
+      try {
+        JSON.parse(body);
+      } catch {
+        return { ok: false, url: response.url || url, status: response.status, error: "La réponse reçue n'est pas un JSON valide." };
+      }
+      return { ok: true, url: response.url || url, status: response.status, body };
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      error: error instanceof DOMException && error.name === "AbortError"
+        ? "La requête a dépassé 10 secondes."
+        : "Connexion impossible : " + (error instanceof Error ? error.message : String(error)),
+    };
+  }
 }
 
 function boolValue(value: InputValue | undefined, fallback: boolean) {
@@ -2235,7 +2312,7 @@ function compactPreviewVariable(value: number | string) {
   return text.length > 56 ? text.slice(0, 53) + "..." : text;
 }
 
-function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], depth = 0) {
+function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>, depth = 0) {
   blocks.forEach((block) => {
     const values = block.values;
     switch (block.definitionId) {
@@ -2328,21 +2405,21 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "control-repeat": {
         const count = clamp(exprPreviewNumber(values.times, state.variables, 10), 0, 20);
         for (let index = 0; index < count; index += 1) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
         }
         break;
       }
       case "control-forever":
         state.messages.push("Toujours: aperçu 1 tour");
-        applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
+        applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
         break;
       case "control-if":
         if (exprPreviewBoolean(values.condition, state.variables)) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
         }
         break;
       case "control-if-else":
-        applyBlocksPreview(state, exprPreviewBoolean(values.condition, state.variables) ? block.children ?? [] : block.elseChildren ?? [], previewKey, screens, depth + 1);
+        applyBlocksPreview(state, exprPreviewBoolean(values.condition, state.variables) ? block.children ?? [] : block.elseChildren ?? [], previewKey, screens, httpResults, depth + 1);
         break;
       case "control-for": {
         const name = textValue(values.variable, "compteur");
@@ -2352,7 +2429,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         let guard = 0;
         for (let current = from; current <= to && guard < 20; current += step) {
           state.variables[name] = current;
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
           guard += 1;
         }
         break;
@@ -2366,13 +2443,25 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         break;
       case "wifi-connect": {
         const ssid = textValue(values.ssid, "");
-        state.messages.push(ssid ? "Wi-Fi : connexion à " + ssid + " (simulation)" : "Wi-Fi : SSID manquant");
+        state.messages.push("Simulation : réseau du PC" + (ssid ? " · SSID ESP32 : " + ssid : ""));
         break;
       }
       case "http-get-json": {
         const target = textValue(values.target, "reponseJson");
-        state.variables[target] = '{"simulation":true,"title":"Réponse GET simulée","id":1,"items":[{"name":"Minitel"}]}';
-        state.messages.push("GET JSON simulé → " + target);
+        const url = textValue(values.url, "").trim();
+        const result = httpResults[url];
+        state.variables[target] = result?.body ?? "";
+        if (!url) {
+          state.messages.push("GET JSON : URL manquante");
+        } else if (!result) {
+          state.messages.push("GET JSON : lance la simulation");
+        } else if (result.status === "loading") {
+          state.messages.push(result.body ? "GET JSON : actualisation…" : "GET JSON en cours…");
+        } else if (result.status === "error") {
+          state.messages.push((result.body ? "Dernière réponse conservée · " : "GET impossible · ") + (result.error || "Erreur réseau"));
+        } else {
+          state.messages.push("GET " + (result.statusCode || 200) + " → " + target);
+        }
         break;
       }
       case "json-read-text": {
@@ -2395,7 +2484,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "json-if-has": {
         const source = String(state.variables[textValue(values.source, "reponseJson")] ?? "");
         if (previewJsonPath(source, textValue(values.path, "")).found) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
         }
         break;
       }
@@ -2463,23 +2552,23 @@ function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], screenConfig: MinitelScreenConfig, screens: MinitelScene[]) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
   const state = createPreviewState(variables, screenConfig);
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
-  setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens));
+  setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
   for (let turn = 0; turn < loopCount; turn += 1) {
-    loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens));
+    loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
   }
 
   simulatedKeys.slice(-12).forEach((key) => {
     state.messages.push("Touche " + minitelKeyLabel(key));
     keyStacks
       .filter((stack) => stack.event.definitionId === "event-key-any" || previewKeyMatches(stack.event.values.key, key))
-      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens));
+      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens, httpResults));
   });
 
   state.messages.push("Tour " + loopCount);
@@ -3626,6 +3715,9 @@ function App() {
   const [simTick, setSimTick] = useState(0);
   const [simSpeed, setSimSpeed] = useState(550);
   const [simulatedKeys, setSimulatedKeys] = useState<string[]>([]);
+  const [simulationHttpResults, setSimulationHttpResults] = useState<Record<string, SimulationHttpState>>({});
+  const simulationHttpGenerationRef = useRef(0);
+  const simulationHttpPendingRef = useRef<Map<string, number>>(new Map());
   const motionTimersRef = useRef<Record<string, number>>({});
   const deleteTimersRef = useRef<number[]>([]);
   const noticeTimerRef = useRef<number | null>(null);
@@ -3649,7 +3741,7 @@ function App() {
   const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
   const sceneElements = activeScreen?.elements ?? [];
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens), [screenConfig, screens, stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, screens), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
@@ -4031,12 +4123,70 @@ function App() {
     flashNotice("Action rétablie");
   }
 
+  function clearSimulationHttpResults() {
+    simulationHttpGenerationRef.current += 1;
+    simulationHttpPendingRef.current.clear();
+    setSimulationHttpResults({});
+  }
+
+  function refreshSimulationHttpResults(eventDefinitionIds?: string[]) {
+    const urls = collectSimulationHttpUrls(stacks, eventDefinitionIds);
+    if (urls.length === 0) return;
+    const generation = simulationHttpGenerationRef.current;
+    const pending = simulationHttpPendingRef.current;
+    const requestedUrls = urls.filter((url) => pending.get(url) !== generation);
+    if (requestedUrls.length === 0) return;
+
+    setSimulationHttpResults((current) => {
+      const next = { ...current };
+      requestedUrls.forEach((url) => {
+        next[url] = { ...(current[url] ?? {}), status: "loading", error: undefined };
+      });
+      return next;
+    });
+
+    requestedUrls.forEach((url) => {
+      pending.set(url, generation);
+      void requestSimulationJson(url)
+        .then((result) => {
+          if (simulationHttpGenerationRef.current !== generation) return;
+          setSimulationHttpResults((current) => ({
+            ...current,
+            [url]: result.ok && result.body !== undefined
+              ? { status: "success", body: result.body, statusCode: result.status, resolvedUrl: result.url }
+              : { ...(current[url] ?? {}), status: "error", statusCode: result.status, resolvedUrl: result.url, error: result.error || "La requête GET a échoué." },
+          }));
+        })
+        .catch((error) => {
+          if (simulationHttpGenerationRef.current !== generation) return;
+          setSimulationHttpResults((current) => ({
+            ...current,
+            [url]: { ...(current[url] ?? {}), status: "error", error: error instanceof Error ? error.message : String(error) },
+          }));
+        })
+        .finally(() => {
+          if (pending.get(url) === generation) pending.delete(url);
+        });
+    });
+  }
+
+  function toggleSimulation() {
+    if (!simRunning) void refreshSimulationHttpResults(["event-setup", "event-loop"]);
+    setSimRunning(!simRunning);
+  }
+
+  function stepSimulation() {
+    setSimTick((current) => current + 1);
+    void refreshSimulationHttpResults(["event-setup", "event-loop"]);
+  }
+
   function triggerSimulatedKey(key: string) {
     if (!keyOptions.some((option) => option.value === key)) return;
     setRightTab("preview");
     setPreviewKey(key);
     setSimulatedKeys((current) => [...current.slice(-11), key]);
     setSimTick((current) => current + 1);
+    void refreshSimulationHttpResults(["event-setup", "event-loop", "event-key-any", "event-key-char"]);
     flashNotice("Touche " + minitelKeyLabel(key) + " simulée");
   }
 
@@ -4044,6 +4194,7 @@ function App() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
+    clearSimulationHttpResults();
   }
 
   async function refreshSerialPorts(silent = false) {
@@ -4077,10 +4228,19 @@ function App() {
   }, [appView, currentProject, projectDirty, saveState]);
 
   useEffect(() => {
+    simulationHttpGenerationRef.current += 1;
+    simulationHttpPendingRef.current.clear();
+    setSimulationHttpResults({});
+  }, [stacks]);
+
+  useEffect(() => {
     if (!simRunning) return undefined;
-    const timer = window.setInterval(() => setSimTick((current) => current + 1), simSpeed);
+    const timer = window.setInterval(() => {
+      setSimTick((current) => current + 1);
+      refreshSimulationHttpResults(["event-loop"]);
+    }, simSpeed);
     return () => window.clearInterval(timer);
-  }, [simRunning, simSpeed]);
+  }, [simRunning, simSpeed, stacks]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -5098,8 +5258,8 @@ function App() {
                 <label className="preview-key"><Keyboard size={15} /><select value={previewKey} onChange={(event) => setPreviewKey(event.target.value)}><SelectOptionList options={keyOptions} /></select></label>
               </div>
               <div className="simulation-panel">
-                <button type="button" className={"sim-button " + (simRunning ? "active" : "")} onClick={() => setSimRunning((current) => !current)} title={simRunning ? "Mettre en pause" : "Lancer la simulation"}>{simRunning ? <Pause size={16} /> : <Play size={16} />}<span>{simRunning ? "Pause" : "Lancer"}</span></button>
-                <button type="button" className="sim-button" onClick={() => setSimTick((current) => current + 1)} title="Avancer d'un tour"><StepForward size={16} /><span>Pas</span></button>
+                <button type="button" className={"sim-button " + (simRunning ? "active" : "")} onClick={toggleSimulation} title={simRunning ? "Mettre en pause" : "Lancer la simulation"}>{simRunning ? <Pause size={16} /> : <Play size={16} />}<span>{simRunning ? "Pause" : "Lancer"}</span></button>
+                <button type="button" className="sim-button" onClick={stepSimulation} title="Avancer d'un tour"><StepForward size={16} /><span>Pas</span></button>
                 <button type="button" className="sim-button" onClick={resetSimulation} title="Remettre la simulation à zéro"><RotateCcw size={16} /><span>Reset</span></button>
                 <button type="button" className="sim-button key-test" onClick={() => triggerSimulatedKey(previewKey)} title="Tester la touche sélectionnée"><Keyboard size={16} /><span>Tester {minitelKeyLabel(previewKey)}</span></button>
                 <label className="speed-control"><span>{simSpeed} ms</span><input type="range" min="150" max="1200" step="50" value={simSpeed} onChange={(event) => setSimSpeed(Number(event.target.value))} /></label>

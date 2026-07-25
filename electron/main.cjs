@@ -1,5 +1,6 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, net } = require("electron");
 const { autoUpdater } = require("electron-updater");
+const { fetchSimulationJson } = require("./simulation-network.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs/promises");
@@ -848,6 +849,10 @@ ipcMain.handle("import-project", async () => {
   } catch {
     return { ok: false, error: "Impossible de lire ce fichier de projet." };
   }
+});
+
+ipcMain.handle("simulation:http-get-json", async (_event, payload) => {
+  return fetchSimulationJson((url, options) => net.fetch(url, options), payload && payload.url);
 });
 
 ipcMain.handle("list-serial-ports", async () => ({

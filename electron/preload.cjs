@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld("minitelStudio", {
   listSerialPorts: () => ipcRenderer.invoke("list-serial-ports"),
   uploadToEsp32: ({ code, board, port }) =>
     ipcRenderer.invoke("upload-esp32", { code, board, port }),
+  fetchJsonForSimulation: (url) =>
+    ipcRenderer.invoke("simulation:http-get-json", { url }),
   onUploadProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on("esp32-upload-progress", listener);

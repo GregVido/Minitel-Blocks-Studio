@@ -734,11 +734,30 @@ textarea:focus-visible {
   min-height: 24px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 7px;
   padding-left: 4px;
   font-size: 10px;
   font-weight: 850;
+}
+
+.query-parameters-header > span {
+  flex: 0 0 auto;
+}
+
+.query-variable-hint {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(242, 95, 92, 0.12);
+  color: #c84655;
+}
+
+.query-parameters-header > button {
+  margin-left: auto;
 }
 
 .query-parameters-header button,
@@ -789,7 +808,17 @@ textarea:focus-visible {
   font-weight: 900;
 }
 
-.query-parameter-row input {
+.query-parameter-field {
+  width: 100%;
+  min-width: 0;
+  min-height: 25px;
+  display: flex;
+  align-items: center;
+  border-radius: 5px;
+  transition: box-shadow 150ms ease, transform 150ms ease, background 150ms ease;
+}
+
+.query-parameter-field input {
   width: 100%;
   min-width: 0;
   height: 25px;
@@ -803,9 +832,79 @@ textarea:focus-visible {
   font-weight: 800;
 }
 
-.query-parameter-row input:focus {
+.query-parameter-field input:focus {
   background: #ffffff;
   box-shadow: 0 0 0 2px rgba(11, 159, 138, 0.28);
+}
+
+.query-parameter-field.expression-drop-active {
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 0 0 3px rgba(242, 95, 92, 0.62), 0 5px 14px rgba(124, 41, 49, 0.2);
+  transform: scale(1.025);
+}
+
+.query-parameter-field.expression-drop-pulse {
+  animation: query-variable-drop 360ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.query-variable-token {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 3px 0 7px;
+  border-radius: 999px;
+  background: #f25f5c;
+  color: #ffffff;
+  box-shadow: inset 0 -2px 0 rgba(124, 32, 42, 0.18), 0 2px 5px rgba(124, 32, 42, 0.16);
+  animation: query-variable-token-in 220ms cubic-bezier(0.2, 0.9, 0.25, 1);
+}
+
+.query-variable-token.is-text {
+  background: #e75669;
+}
+
+.query-variable-token svg {
+  flex: 0 0 auto;
+}
+
+.query-variable-token strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query-parameter-row .query-variable-token button {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  flex-basis: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.query-parameter-row .query-variable-token button:hover {
+  background: rgba(255, 255, 255, 0.34);
+  color: #ffffff;
+  transform: none;
+}
+
+@keyframes query-variable-token-in {
+  from { opacity: 0; transform: scale(0.78); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes query-variable-drop {
+  0% { transform: scale(0.92); }
+  55% { transform: scale(1.06); }
+  100% { transform: scale(1); }
 }
 
 .expression-control {
@@ -919,7 +1018,8 @@ textarea:focus-visible {
 }
 
 .app-shell.dragging-active.expression-number-dragging .drop-target,
-.app-shell.dragging-active.expression-boolean-dragging .drop-target {
+.app-shell.dragging-active.expression-boolean-dragging .drop-target,
+.app-shell.dragging-active.expression-text-dragging .drop-target {
   height: 14px;
   min-height: 14px;
   background: transparent;

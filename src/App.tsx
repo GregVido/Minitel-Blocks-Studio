@@ -250,7 +250,11 @@ type ExpressionDropOwner =
 
 type ExpressionDropLocation = ExpressionDropOwner & {
   path: ExpressionPathPart[];
-  accepts: "number" | "boolean";
+  accepts: "number" | "boolean" | "query";
+  queryTarget?: {
+    index: number;
+    field: "key" | "value";
+  };
 };
 
 type DragPayload =
@@ -397,6 +401,11 @@ const textExpr = (value: string): Expr => ({ kind: "literal", valueType: "text",
 const boolExpr = (value: boolean): Expr => ({ kind: "literal", valueType: "boolean", value });
 const variableExpr = (name: string): Expr => ({ kind: "variable", valueType: "number", name });
 const variableValueType = (variable: VariableDef): VariableValueType => variable.valueType === "text" ? "text" : "number";
+const variableReferenceExpr = (variable: VariableDef): Expr => ({
+  kind: "variable",
+  valueType: variableValueType(variable),
+  name: variable.name,
+});
 const binaryExpr = (op: BinaryExpr["op"], left: Expr, right: Expr): Expr => ({ kind: "binary", valueType: "number", op, left, right });
 const addExpr = (left: Expr, right: Expr): Expr => binaryExpr("+", left, right);
 const randomExpr = (from: Expr, to: Expr): Expr => ({ kind: "random", valueType: "number", from, to });
@@ -451,45 +460,110 @@ function textValue(value: InputValue | undefined, fallback: string) {
   return String(value);
 }
 
-function normalizeQueryString(value: unknown) {
-  if (typeof value !== "string") return "";
-  const source = value.trim().replace(/^[?&]+/, "");
-  const normalized = new URLSearchParams();
-  new URLSearchParams(source).forEach((parameterValue, parameterKey) => {
-    const key = parameterKey.trim();
-    if (key) normalized.append(key, parameterValue);
-  });
-  return normalized.toString();
+const QUERY_VARIABLE_PATTERN = /^\{\{mbs-variable:([^{}]+)\}\}$/;
+
+type QueryParameterEntry = {
+  key: string;
+  value: string;
+};
+
+function queryVariableToken(name: string) {
+  return "{{mbs-variable:" + encodeURIComponent(name.trim()) + "}}";
 }
 
-function appendQueryToUrl(rawUrl: string, rawQuery: unknown) {
+function queryVariableName(value: string) {
+  const match = QUERY_VARIABLE_PATTERN.exec(value.trim());
+  if (!match) return "";
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return "";
+  }
+}
+
+function queryEntriesFromValue(value: unknown): QueryParameterEntry[] {
+  if (typeof value !== "string") return [];
+  const source = value.trim().replace(/^[?&]+/, "");
+  if (!source) return [];
+  return Array.from(new URLSearchParams(source).entries()).map(([key, parameterValue]) => ({
+    key,
+    value: parameterValue,
+  }));
+}
+
+function queryValueFromEntries(entries: QueryParameterEntry[]) {
+  const parameters = new URLSearchParams();
+  entries.forEach((entry) => {
+    const key = entry.key.trim();
+    if (key) parameters.append(key, entry.value);
+  });
+  return parameters.toString();
+}
+
+function normalizeQueryString(value: unknown) {
+  return queryValueFromEntries(queryEntriesFromValue(value));
+}
+
+function resolveQueryPart(value: string, variables: Record<string, number | string>) {
+  const variableName = queryVariableName(value);
+  return variableName ? String(variables[variableName] ?? "") : value;
+}
+
+function resolvedQueryEntries(rawQuery: unknown, variables: Record<string, number | string>) {
+  return queryEntriesFromValue(rawQuery).flatMap((entry) => {
+    const key = resolveQueryPart(entry.key, variables).trim();
+    return key ? [{ key, value: resolveQueryPart(entry.value, variables) }] : [];
+  });
+}
+
+function appendQueryToUrl(rawUrl: string, rawQuery: unknown, variables: Record<string, number | string> = {}) {
   const url = rawUrl.trim();
-  const query = normalizeQueryString(rawQuery);
-  if (!query) return url;
+  const entries = resolvedQueryEntries(rawQuery, variables);
+  if (entries.length === 0) return url;
   try {
     const parsedUrl = new URL(url);
-    new URLSearchParams(query).forEach((value, key) => parsedUrl.searchParams.append(key, value));
+    entries.forEach(({ key, value }) => parsedUrl.searchParams.append(key, value));
     return parsedUrl.toString();
   } catch {
     const hashIndex = url.indexOf("#");
     const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
     const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
     const separator = base.includes("?") ? (base.endsWith("?") || base.endsWith("&") ? "" : "&") : "?";
-    return base + separator + query + hash;
+    return base + separator + queryValueFromEntries(entries) + hash;
   }
 }
 
-function httpRequestUrl(values: Values) {
-  return appendQueryToUrl(textValue(values.url, ""), values.query);
+function httpRequestUrl(values: Values, variables: Record<string, number | string> = {}) {
+  return appendQueryToUrl(textValue(values.url, ""), values.query, variables);
 }
 
-function collectSimulationHttpUrls(stacks: ScriptStack[], eventDefinitionIds?: string[]) {
+function replaceQueryFieldValue(rawQuery: unknown, index: number, field: "key" | "value", replacement: string) {
+  const entries = queryEntriesFromValue(rawQuery);
+  while (entries.length <= index) entries.push({ key: "", value: "" });
+  entries[index] = { ...entries[index], [field]: replacement };
+  if (field === "value" && !entries[index].key.trim()) entries[index].key = "parametre";
+  return queryValueFromEntries(entries);
+}
+
+function replaceQueryVariableReference(rawQuery: unknown, previousName: string, nextName?: string) {
+  const replacement = nextName ? queryVariableToken(nextName) : "";
+  return queryValueFromEntries(queryEntriesFromValue(rawQuery).map((entry) => ({
+    key: queryVariableName(entry.key) === previousName ? replacement : entry.key,
+    value: queryVariableName(entry.value) === previousName ? replacement : entry.value,
+  })));
+}
+
+function collectSimulationHttpUrls(
+  stacks: ScriptStack[],
+  variables: Record<string, number | string> = {},
+  eventDefinitionIds?: string[],
+) {
   const urls = new Set<string>();
   const allowedEvents = eventDefinitionIds ? new Set(eventDefinitionIds) : null;
   const visit = (blocks: ProgramBlock[]) => {
     blocks.forEach((block) => {
       if (block.definitionId === "http-get-json") {
-        const url = httpRequestUrl(block.values);
+        const url = httpRequestUrl(block.values, variables);
         if (url) urls.add(url);
       }
       visit(block.children ?? []);
@@ -861,7 +935,7 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
-  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Ajoute autant de paramètres query clé/valeur que nécessaire.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
+  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/todos/1", placeholder: "https://api.exemple.fr/donnees" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
@@ -1770,42 +1844,62 @@ function replaceNumberVariableReference(value: InputValue, variableName: string,
   return value;
 }
 
-function repairVariableValues(definition: BlockDefinition | undefined, values: Values, variables: VariableDef[], previousName: string, numberReplacement: Expr) {
+function repairVariableValues(
+  definition: BlockDefinition | undefined,
+  values: Values,
+  variables: VariableDef[],
+  previousName: string,
+  numberReplacement: Expr,
+  nextName?: string,
+) {
   const nextValues = Object.fromEntries(Object.entries(values).map(([key, value]) => {
     const input = definition?.inputs?.find((item) => item.key === key);
+    if (input?.type === "query") {
+      return [key, replaceQueryVariableReference(value, previousName, nextName)];
+    }
     if (input?.type === "variable" && value === previousName) {
       const expectedType = input.variableType ?? "number";
       const compatibleVariables = expectedType === "any"
         ? variables
         : variables.filter((variable) => variableValueType(variable) === expectedType);
-      const currentVariable = variables.find((variable) => variable.name === previousName);
-      const remainsCompatible = currentVariable && (expectedType === "any" || variableValueType(currentVariable) === expectedType);
-      return [key, remainsCompatible ? previousName : compatibleVariables[0]?.name ?? ""];
+      const renamedVariable = nextName ? variables.find((variable) => variable.name === nextName) : undefined;
+      const renamedVariableIsCompatible = renamedVariable
+        && (expectedType === "any" || variableValueType(renamedVariable) === expectedType);
+      return [key, renamedVariableIsCompatible ? nextName : compatibleVariables[0]?.name ?? ""];
     }
     return [key, replaceNumberVariableReference(value, previousName, numberReplacement)];
   }));
   return nextValues as Values;
 }
 
-function repairVariableReferencesInBlocks(blocks: ProgramBlock[], variables: VariableDef[], previousName: string, numberReplacement: Expr): ProgramBlock[] {
+function repairVariableReferencesInBlocks(
+  blocks: ProgramBlock[],
+  variables: VariableDef[],
+  previousName: string,
+  numberReplacement: Expr,
+  nextName?: string,
+): ProgramBlock[] {
   return blocks.map((block) => ({
     ...block,
-    values: repairVariableValues(blockById[block.definitionId], block.values, variables, previousName, numberReplacement),
-    children: block.children ? repairVariableReferencesInBlocks(block.children, variables, previousName, numberReplacement) : undefined,
-    elseChildren: block.elseChildren ? repairVariableReferencesInBlocks(block.elseChildren, variables, previousName, numberReplacement) : undefined,
+    values: repairVariableValues(blockById[block.definitionId], block.values, variables, previousName, numberReplacement, nextName),
+    children: block.children ? repairVariableReferencesInBlocks(block.children, variables, previousName, numberReplacement, nextName) : undefined,
+    elseChildren: block.elseChildren ? repairVariableReferencesInBlocks(block.elseChildren, variables, previousName, numberReplacement, nextName) : undefined,
   }));
 }
 
-function repairVariableReferencesInStacks(stacks: ScriptStack[], variables: VariableDef[], previousName: string) {
-  const replacementVariable = variables.find((variable) => variableValueType(variable) === "number");
+function repairVariableReferencesInStacks(stacks: ScriptStack[], variables: VariableDef[], previousName: string, nextName?: string) {
+  const renamedVariable = nextName ? variables.find((variable) => variable.name === nextName) : undefined;
+  const replacementVariable = renamedVariable && variableValueType(renamedVariable) === "number"
+    ? renamedVariable
+    : variables.find((variable) => variableValueType(variable) === "number");
   const numberReplacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
   return stacks.map((stack) => ({
     ...stack,
     event: {
       ...stack.event,
-      values: repairVariableValues(blockById[stack.event.definitionId], stack.event.values, variables, previousName, numberReplacement),
+      values: repairVariableValues(blockById[stack.event.definitionId], stack.event.values, variables, previousName, numberReplacement, nextName),
     },
-    blocks: repairVariableReferencesInBlocks(stack.blocks, variables, previousName, numberReplacement),
+    blocks: repairVariableReferencesInBlocks(stack.blocks, variables, previousName, numberReplacement, nextName),
   }));
 }
 
@@ -1858,6 +1952,14 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
 
 function pushLine(lines: string[], indent: number, line: string) {
   lines.push(" ".repeat(indent) + line);
+}
+
+function queryPartCode(value: string, variables: VariableDef[]) {
+  const variableName = queryVariableName(value);
+  if (!variableName) return cppString(value);
+  return variables.some((variable) => variable.name === variableName)
+    ? "String(" + sanitizeIdentifier(variableName) + ")"
+    : "String()";
 }
 
 function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number, variables: VariableDef[], context?: CodeContext) {
@@ -1992,9 +2094,22 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
-      case "http-get-json":
-        pushLine(lines, indent, sanitizeIdentifier(textValue(values.target, "reponseJson")) + " = mbsHttpGetJson(" + cppString(httpRequestUrl(values)) + ");");
+      case "http-get-json": {
+        const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
+        const queryEntries = queryEntriesFromValue(values.query);
+        if (queryEntries.length === 0) {
+          pushLine(lines, indent, target + " = mbsHttpGetJson(" + cppString(textValue(values.url, "")) + ");");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "String mbsUrl = " + cppString(textValue(values.url, "")) + ";");
+        queryEntries.forEach((entry) => {
+          pushLine(lines, indent + 2, "mbsAppendQuery(mbsUrl, " + queryPartCode(entry.key, variables) + ", " + queryPartCode(entry.value, variables) + ");");
+        });
+        pushLine(lines, indent + 2, target + " = mbsHttpGetJson(mbsUrl);");
+        pushLine(lines, indent, "}");
         break;
+      }
       case "json-read-text":
         pushLine(lines, indent, "mbsJsonReadText(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "texte")) + ");");
         break;
@@ -2204,6 +2319,39 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
 
   if (usesHttp) {
     lines.push(
+      "",
+      "String mbsUrlEncode(const String &value) {",
+      "  static const char hex[] = \"0123456789ABCDEF\";",
+      "  String encoded;",
+      "  encoded.reserve(value.length() * 3);",
+      "  for (size_t index = 0; index < value.length(); ++index) {",
+      "    const uint8_t character = (uint8_t)value[index];",
+      "    const bool plain = (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || character == '-' || character == '_' || character == '.' || character == '~';",
+      "    if (plain) encoded += (char)character;",
+      "    else {",
+      "      encoded += '%';",
+      "      encoded += hex[(character >> 4) & 0x0F];",
+      "      encoded += hex[character & 0x0F];",
+      "    }",
+      "  }",
+      "  return encoded;",
+      "}",
+      "",
+      "void mbsAppendQuery(String &url, const String &key, const String &value) {",
+      "  if (key.length() == 0) return;",
+      "  String fragment;",
+      "  const int hashIndex = url.indexOf('#');",
+      "  if (hashIndex >= 0) {",
+      "    fragment = url.substring(hashIndex);",
+      "    url.remove(hashIndex);",
+      "  }",
+      "  if (url.indexOf('?') < 0) url += '?';",
+      "  else if (!url.endsWith(\"?\") && !url.endsWith(\"&\")) url += '&';",
+      "  url += mbsUrlEncode(key);",
+      "  url += '=';",
+      "  url += mbsUrlEncode(value);",
+      "  url += fragment;",
+      "}",
       "",
       "String mbsHttpGetJson(const String &url) {",
       "  if (WiFi.status() != WL_CONNECTED || url.length() == 0) return String();",
@@ -2485,7 +2633,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       }
       case "http-get-json": {
         const target = textValue(values.target, "reponseJson");
-        const url = httpRequestUrl(values);
+        const url = httpRequestUrl(values, state.variables);
         const result = httpResults[url];
         state.variables[target] = result?.body ?? "";
         if (!url) {
@@ -2727,7 +2875,10 @@ function expressionDropLocationKey(location: ExpressionDropLocation) {
     : location.owner === "event"
       ? ["event", location.stackId, location.inputKey]
       : ["variable", location.variableId];
-  return [...ownerKey, location.accepts, location.path.join(".") || "root"].join("|");
+  const targetKey = location.queryTarget
+    ? ["query", location.queryTarget.index, location.queryTarget.field]
+    : [location.path.join(".") || "root"];
+  return [...ownerKey, location.accepts, ...targetKey].join("|");
 }
 
 function numberExpression(value: InputValue | undefined): Expr {
@@ -3103,31 +3254,70 @@ function SelectOptionList({ options }: { options: SelectOption[] }) {
   );
 }
 
-type QueryParameterRow = {
+type QueryParameterRow = QueryParameterEntry & {
   id: string;
-  key: string;
-  value: string;
 };
 
 function queryRowsFromValue(value: string): QueryParameterRow[] {
-  const rows = Array.from(new URLSearchParams(value).entries()).map(([key, parameterValue]) => ({
-    id: uid(),
-    key,
-    value: parameterValue,
-  }));
+  const rows = queryEntriesFromValue(value).map((entry) => ({ ...entry, id: uid() }));
   return rows.length > 0 ? rows : [{ id: uid(), key: "", value: "" }];
 }
 
-function queryValueFromRows(rows: QueryParameterRow[]) {
-  const parameters = new URLSearchParams();
-  rows.forEach((row) => {
-    const key = row.key.trim();
-    if (key) parameters.append(key, row.value);
-  });
-  return parameters.toString();
+function QueryParameterField({
+  value,
+  placeholder,
+  ariaLabel,
+  variables,
+  dropLocation,
+  onChange,
+}: {
+  value: string;
+  placeholder: string;
+  ariaLabel: string;
+  variables: VariableDef[];
+  dropLocation?: ExpressionDropLocation;
+  onChange: (value: string) => void;
+}) {
+  const variableName = queryVariableName(value);
+  const variable = variables.find((item) => item.name === variableName);
+  const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
+
+  return (
+    <div
+      className={"query-parameter-field" + (variableName ? " has-variable" : "")}
+      data-expression-drop={dropLocation ? JSON.stringify(dropLocation) : undefined}
+      data-expression-drop-key={dropKey}
+      data-expression-accepts={dropLocation?.accepts}
+      title={variableName ? undefined : "Déposer une variable ici"}
+    >
+      {variableName ? (
+        <span className={"query-variable-token is-" + (variable ? variableValueType(variable) : "text")} title={"Valeur de " + variableName}>
+          <Variable size={13} aria-hidden="true" />
+          <strong>{variableName}</strong>
+          <button type="button" onClick={() => onChange("")} title="Retirer la variable" aria-label={"Retirer la variable " + variableName}>
+            <X size={11} />
+          </button>
+        </span>
+      ) : (
+        <input type="text" value={value} placeholder={placeholder} aria-label={ariaLabel} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
+      )}
+    </div>
+  );
 }
 
-function QueryParametersEditor({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function QueryParametersEditor({
+  label,
+  value,
+  variables,
+  expressionOwner,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  variables: VariableDef[];
+  expressionOwner?: ExpressionDropOwner;
+  onChange: (value: string) => void;
+}) {
   const normalizedValue = normalizeQueryString(value);
   const [rows, setRows] = useState<QueryParameterRow[]>(() => queryRowsFromValue(normalizedValue));
   const lastEmittedValueRef = useRef(normalizedValue);
@@ -3140,7 +3330,7 @@ function QueryParametersEditor({ label, value, onChange }: { label: string; valu
 
   const commit = (nextRows: QueryParameterRow[]) => {
     setRows(nextRows);
-    const nextValue = queryValueFromRows(nextRows);
+    const nextValue = queryValueFromEntries(nextRows);
     if (nextValue === lastEmittedValueRef.current) return;
     lastEmittedValueRef.current = nextValue;
     onChange(nextValue);
@@ -3155,10 +3345,19 @@ function QueryParametersEditor({ label, value, onChange }: { label: string; valu
     commit(nextRows.length > 0 ? nextRows : [{ id: uid(), key: "", value: "" }]);
   };
 
+  const queryDropLocation = (index: number, field: "key" | "value"): ExpressionDropLocation | undefined => (
+    expressionOwner
+      ? { ...expressionOwner, path: [], accepts: "query", queryTarget: { index, field } }
+      : undefined
+  );
+
   return (
     <div className="query-parameters-control" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
       <div className="query-parameters-header">
         <span>{label}</span>
+        <span className="query-variable-hint" title="Les clés et valeurs acceptent les variables">
+          <Variable size={12} aria-hidden="true" />
+        </span>
         <button type="button" onClick={() => setRows((current) => [...current, { id: uid(), key: "", value: "" }])} title="Ajouter un paramètre query" aria-label="Ajouter un paramètre query">
           <Plus size={14} />
         </button>
@@ -3166,9 +3365,23 @@ function QueryParametersEditor({ label, value, onChange }: { label: string; valu
       <div className="query-parameter-list">
         {rows.map((row, index) => (
           <div className="query-parameter-row" key={row.id}>
-            <input type="text" value={row.key} placeholder="clé" aria-label={"Clé query " + (index + 1)} autoComplete="off" onChange={(event) => updateRow(row.id, "key", event.target.value)} />
+            <QueryParameterField
+              value={row.key}
+              placeholder="clé"
+              ariaLabel={"Clé query " + (index + 1)}
+              variables={variables}
+              dropLocation={queryDropLocation(index, "key")}
+              onChange={(nextValue) => updateRow(row.id, "key", nextValue)}
+            />
             <span aria-hidden="true">=</span>
-            <input type="text" value={row.value} placeholder="valeur" aria-label={"Valeur query " + (index + 1)} autoComplete="off" onChange={(event) => updateRow(row.id, "value", event.target.value)} />
+            <QueryParameterField
+              value={row.value}
+              placeholder="valeur"
+              ariaLabel={"Valeur query " + (index + 1)}
+              variables={variables}
+              dropLocation={queryDropLocation(index, "value")}
+              onChange={(nextValue) => updateRow(row.id, "value", nextValue)}
+            />
             <button type="button" onClick={() => removeRow(row.id)} title="Supprimer ce paramètre query" aria-label={"Supprimer le paramètre query " + (index + 1)}>
               <Trash2 size={13} />
             </button>
@@ -3212,7 +3425,15 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
   }
 
   if (input.type === "query") {
-    return <QueryParametersEditor label={input.label} value={String(actualValue)} onChange={onChange} />;
+    return (
+      <QueryParametersEditor
+        label={input.label}
+        value={String(actualValue)}
+        variables={variables}
+        expressionOwner={expressionOwner}
+        onChange={onChange}
+      />
+    );
   }
 
   if (input.type === "boolean") {
@@ -3854,7 +4075,24 @@ function App() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
 
   const activeStackId = selectedStackId || stacks[0]?.id || "";
-  const activeBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
+  const variableValueBlocks = useMemo<BlockDefinition[]>(() => variables
+    .filter((variable) => variable.name.trim())
+    .map((variable) => ({
+      id: "variable-value-" + variable.id,
+      title: variable.name,
+      help: "Valeur de " + variable.name + ". Glisse ce bloc dans un emplacement compatible.",
+      kind: "value",
+      category: "variables",
+      color: variableValueType(variable) === "text" ? "#e75669" : "#f25f5c",
+      output: variableReferenceExpr(variable),
+    })), [variables]);
+  const paletteDefinitionById = useMemo(() => [...blockDefinitions, ...variableValueBlocks]
+    .reduce<Record<string, BlockDefinition>>((definitions, definition) => {
+      definitions[definition.id] = definition;
+      return definitions;
+    }, {}), [variableValueBlocks]);
+  const categoryBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
+  const activeBlocks = activeCategory === "variables" ? [...variableValueBlocks, ...categoryBlocks] : categoryBlocks;
   const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
   const sceneElements = activeScreen?.elements ?? [];
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens), [screenConfig, screens, stacks, variables]);
@@ -3996,8 +4234,8 @@ function App() {
 
   function expressionOutputForPayload(payload: DragPayload): Expr | null {
     if (payload.source !== "palette") return null;
-    const output = blockById[payload.definitionId]?.output;
-    if (!output || (output.valueType !== "number" && output.valueType !== "boolean")) return null;
+    const output = paletteDefinitionById[payload.definitionId]?.output;
+    if (!output || !["number", "boolean", "text"].includes(output.valueType)) return null;
     return output;
   }
 
@@ -4006,7 +4244,6 @@ function App() {
     y: number,
     output: Expr,
   ): { element: HTMLElement; location: ExpressionDropLocation } | null {
-    const accepts = output.valueType === "boolean" ? "boolean" : "number";
     const elements = document.elementsFromPoint(x, y) as HTMLElement[];
     const visited = new Set<HTMLElement>();
     for (const element of elements) {
@@ -4017,7 +4254,10 @@ function App() {
       if (!raw) continue;
       try {
         const location = JSON.parse(raw) as ExpressionDropLocation;
-        if (location.accepts === accepts) return { element: target, location };
+        const acceptsQueryVariable = location.accepts === "query"
+          && output.kind === "variable"
+          && (output.valueType === "number" || output.valueType === "text");
+        if (acceptsQueryVariable || location.accepts === output.valueType) return { element: target, location };
       } catch {
         // Ignore an obsolete target left by a render in progress.
       }
@@ -4247,7 +4487,7 @@ function App() {
   }
 
   function refreshSimulationHttpResults(eventDefinitionIds?: string[]) {
-    const urls = collectSimulationHttpUrls(stacks, eventDefinitionIds);
+    const urls = collectSimulationHttpUrls(stacks, preview.variables, eventDefinitionIds);
     if (urls.length === 0) return;
     const generation = simulationHttpGenerationRef.current;
     const pending = simulationHttpPendingRef.current;
@@ -4348,7 +4588,7 @@ function App() {
     simulationHttpGenerationRef.current += 1;
     simulationHttpPendingRef.current.clear();
     setSimulationHttpResults({});
-  }, [stacks]);
+  }, [stacks, variables]);
 
   useEffect(() => {
     if (!simRunning) return undefined;
@@ -4357,7 +4597,7 @@ function App() {
       refreshSimulationHttpResults(["event-loop"]);
     }, simSpeed);
     return () => window.clearInterval(timer);
-  }, [simRunning, simSpeed, stacks]);
+  }, [simRunning, simSpeed, stacks, variables]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -4547,7 +4787,35 @@ function App() {
 
   function handleDropExpression(payload: DragPayload, location: ExpressionDropLocation) {
     const output = expressionOutputForPayload(payload);
-    if (!output || output.valueType !== location.accepts) return;
+    if (!output) return;
+    if (location.accepts === "query") {
+      if (output.kind !== "variable" || !location.queryTarget || location.owner !== "block") return;
+      const replacement = queryVariableToken(output.name);
+      pushHistory();
+      setStacks((current) => current.map((stack) => (
+        stack.id === location.stackId
+          ? {
+              ...stack,
+              blocks: updateBlockTree(stack.blocks, location.blockId, (block) => ({
+                ...block,
+                values: {
+                  ...block.values,
+                  [location.inputKey]: replaceQueryFieldValue(
+                    block.values[location.inputKey],
+                    location.queryTarget!.index,
+                    location.queryTarget!.field,
+                    replacement,
+                  ),
+                },
+              })),
+            }
+          : stack
+      )));
+      pulseExpressionTarget(location);
+      flashNotice("Variable " + output.name + " insérée");
+      return;
+    }
+    if (output.valueType !== location.accepts) return;
     const replacement = cloneValue(output);
     const replaceValue = (value: InputValue | undefined): Expr => {
       const root = isExpr(value)
@@ -4598,7 +4866,8 @@ function App() {
   function handleDropBranch(payload: DragPayload, location: DropLocation) {
     setActiveDropKey("");
     if (payload.source === "palette") {
-      const definition = blockById[payload.definitionId];
+      const definition = paletteDefinitionById[payload.definitionId];
+      if (!definition) return;
       if (definition.kind === "event") {
         createStackFromEvent(definition.id);
         return;
@@ -4671,7 +4940,8 @@ function App() {
     const payload = readDragPayload(event);
     if (!payload) return;
     if (payload.source === "palette") {
-      const definition = blockById[payload.definitionId];
+      const definition = paletteDefinitionById[payload.definitionId];
+      if (!definition) return;
       if (definition.kind === "event") createStackFromEvent(definition.id);
       else if (activeStackId && definition.kind !== "value") addBlockToStack(activeStackId, definition.id);
     }
@@ -4836,14 +5106,24 @@ function App() {
 
     pushHistory();
     const nextVariables = variables.map((variable) => (variable.id === id ? { ...variable, ...patch } : variable));
-    if (nextType !== previousType) {
-      const replacementVariable = nextVariables.find((variable) => variableValueType(variable) === "number");
+    const nextName = nextVariables.find((variable) => variable.id === id)?.name ?? currentVariable.name;
+    const nameChanged = nextName !== currentVariable.name;
+    if (nextType !== previousType || nameChanged) {
+      const renamedVariable = nextVariables.find((variable) => variable.id === id);
+      const replacementVariable = renamedVariable && variableValueType(renamedVariable) === "number"
+        ? renamedVariable
+        : nextVariables.find((variable) => variableValueType(variable) === "number");
       const replacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
       setVariables(nextVariables.map((variable) => ({
         ...variable,
         defaultValue: replaceNumberVariableReference(variable.defaultValue, currentVariable.name, replacement) as Expr,
       })));
-      setStacks((current) => repairVariableReferencesInStacks(current, nextVariables, currentVariable.name));
+      setStacks((current) => repairVariableReferencesInStacks(
+        current,
+        nextVariables,
+        currentVariable.name,
+        nameChanged ? nextName : currentVariable.name,
+      ));
       return;
     }
     setVariables(nextVariables);
@@ -5269,7 +5549,7 @@ function App() {
   }
 
   return (
-    <div className={"app-shell" + (dragPreview ? " dragging-active" : "") + (blockById[draggingPaletteId]?.output?.valueType === "number" ? " expression-number-dragging" : blockById[draggingPaletteId]?.output?.valueType === "boolean" ? " expression-boolean-dragging" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
+    <div className={"app-shell" + (dragPreview ? " dragging-active" : "") + (paletteDefinitionById[draggingPaletteId]?.output?.valueType === "number" ? " expression-number-dragging" : paletteDefinitionById[draggingPaletteId]?.output?.valueType === "boolean" ? " expression-boolean-dragging" : paletteDefinitionById[draggingPaletteId]?.output?.valueType === "text" ? " expression-text-dragging" : "")} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={cancelPointerDrag}>
       <header className="topbar">
         <div className="brand-mark"><img src={appLogo} alt="" /></div>
         <div className="brand-copy">

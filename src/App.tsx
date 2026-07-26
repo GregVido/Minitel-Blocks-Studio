@@ -62,7 +62,7 @@ import {
 import ProjectHub, { type NewProjectSettings } from "./project-hub";
 
 type BlockKind = "event" | "action" | "control" | "value";
-type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen";
+type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "query";
 type ExprType = "number" | "boolean" | "text";
 type VariableValueType = "number" | "text";
 type RightTab = "preview" | "code" | "upload";
@@ -451,13 +451,45 @@ function textValue(value: InputValue | undefined, fallback: string) {
   return String(value);
 }
 
+function normalizeQueryString(value: unknown) {
+  if (typeof value !== "string") return "";
+  const source = value.trim().replace(/^[?&]+/, "");
+  const normalized = new URLSearchParams();
+  new URLSearchParams(source).forEach((parameterValue, parameterKey) => {
+    const key = parameterKey.trim();
+    if (key) normalized.append(key, parameterValue);
+  });
+  return normalized.toString();
+}
+
+function appendQueryToUrl(rawUrl: string, rawQuery: unknown) {
+  const url = rawUrl.trim();
+  const query = normalizeQueryString(rawQuery);
+  if (!query) return url;
+  try {
+    const parsedUrl = new URL(url);
+    new URLSearchParams(query).forEach((value, key) => parsedUrl.searchParams.append(key, value));
+    return parsedUrl.toString();
+  } catch {
+    const hashIndex = url.indexOf("#");
+    const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+    const hash = hashIndex >= 0 ? url.slice(hashIndex) : "";
+    const separator = base.includes("?") ? (base.endsWith("?") || base.endsWith("&") ? "" : "&") : "?";
+    return base + separator + query + hash;
+  }
+}
+
+function httpRequestUrl(values: Values) {
+  return appendQueryToUrl(textValue(values.url, ""), values.query);
+}
+
 function collectSimulationHttpUrls(stacks: ScriptStack[], eventDefinitionIds?: string[]) {
   const urls = new Set<string>();
   const allowedEvents = eventDefinitionIds ? new Set(eventDefinitionIds) : null;
   const visit = (blocks: ProgramBlock[]) => {
     blocks.forEach((block) => {
       if (block.definitionId === "http-get-json") {
-        const url = textValue(block.values.url, "").trim();
+        const url = httpRequestUrl(block.values);
         if (url) urls.add(url);
       }
       visit(block.children ?? []);
@@ -829,8 +861,9 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
-  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON depuis une URL et la range dans une variable Texte.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
+  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Ajoute autant de paramètres query clé/valeur que nécessaire.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/todos/1", placeholder: "https://api.exemple.fr/donnees" },
+    { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "network", color: "#138c7d", inputs: [
@@ -965,6 +998,10 @@ function normalizeImportedValues(definition: BlockDefinition, value: unknown): V
     }
     if (input.type === "text") {
       if (["string", "number", "boolean"].includes(typeof importedValue)) values[input.key] = String(importedValue).slice(0, 1024);
+      return;
+    }
+    if (input.type === "query") {
+      if (typeof importedValue === "string") values[input.key] = normalizeQueryString(importedValue.slice(0, 4096));
       return;
     }
     if (input.type === "variable") {
@@ -1956,7 +1993,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         break;
       }
       case "http-get-json":
-        pushLine(lines, indent, sanitizeIdentifier(textValue(values.target, "reponseJson")) + " = mbsHttpGetJson(" + cppString(values.url) + ");");
+        pushLine(lines, indent, sanitizeIdentifier(textValue(values.target, "reponseJson")) + " = mbsHttpGetJson(" + cppString(httpRequestUrl(values)) + ");");
         break;
       case "json-read-text":
         pushLine(lines, indent, "mbsJsonReadText(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "texte")) + ");");
@@ -2448,7 +2485,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       }
       case "http-get-json": {
         const target = textValue(values.target, "reponseJson");
-        const url = textValue(values.url, "").trim();
+        const url = httpRequestUrl(values);
         const result = httpResults[url];
         state.variables[target] = result?.body ?? "";
         if (!url) {
@@ -3066,6 +3103,82 @@ function SelectOptionList({ options }: { options: SelectOption[] }) {
   );
 }
 
+type QueryParameterRow = {
+  id: string;
+  key: string;
+  value: string;
+};
+
+function queryRowsFromValue(value: string): QueryParameterRow[] {
+  const rows = Array.from(new URLSearchParams(value).entries()).map(([key, parameterValue]) => ({
+    id: uid(),
+    key,
+    value: parameterValue,
+  }));
+  return rows.length > 0 ? rows : [{ id: uid(), key: "", value: "" }];
+}
+
+function queryValueFromRows(rows: QueryParameterRow[]) {
+  const parameters = new URLSearchParams();
+  rows.forEach((row) => {
+    const key = row.key.trim();
+    if (key) parameters.append(key, row.value);
+  });
+  return parameters.toString();
+}
+
+function QueryParametersEditor({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const normalizedValue = normalizeQueryString(value);
+  const [rows, setRows] = useState<QueryParameterRow[]>(() => queryRowsFromValue(normalizedValue));
+  const lastEmittedValueRef = useRef(normalizedValue);
+
+  useEffect(() => {
+    if (normalizedValue === lastEmittedValueRef.current) return;
+    lastEmittedValueRef.current = normalizedValue;
+    setRows(queryRowsFromValue(normalizedValue));
+  }, [normalizedValue]);
+
+  const commit = (nextRows: QueryParameterRow[]) => {
+    setRows(nextRows);
+    const nextValue = queryValueFromRows(nextRows);
+    if (nextValue === lastEmittedValueRef.current) return;
+    lastEmittedValueRef.current = nextValue;
+    onChange(nextValue);
+  };
+
+  const updateRow = (rowId: string, field: "key" | "value", nextValue: string) => {
+    commit(rows.map((row) => row.id === rowId ? { ...row, [field]: nextValue } : row));
+  };
+
+  const removeRow = (rowId: string) => {
+    const nextRows = rows.filter((row) => row.id !== rowId);
+    commit(nextRows.length > 0 ? nextRows : [{ id: uid(), key: "", value: "" }]);
+  };
+
+  return (
+    <div className="query-parameters-control" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+      <div className="query-parameters-header">
+        <span>{label}</span>
+        <button type="button" onClick={() => setRows((current) => [...current, { id: uid(), key: "", value: "" }])} title="Ajouter un paramètre query" aria-label="Ajouter un paramètre query">
+          <Plus size={14} />
+        </button>
+      </div>
+      <div className="query-parameter-list">
+        {rows.map((row, index) => (
+          <div className="query-parameter-row" key={row.id}>
+            <input type="text" value={row.key} placeholder="clé" aria-label={"Clé query " + (index + 1)} autoComplete="off" onChange={(event) => updateRow(row.id, "key", event.target.value)} />
+            <span aria-hidden="true">=</span>
+            <input type="text" value={row.value} placeholder="valeur" aria-label={"Valeur query " + (index + 1)} autoComplete="off" onChange={(event) => updateRow(row.id, "value", event.target.value)} />
+            <button type="button" onClick={() => removeRow(row.id)} title="Supprimer ce paramètre query" aria-label={"Supprimer le paramètre query " + (index + 1)}>
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function InputControl({ input, value, variables, screens = [], expressionOwner, onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; expressionOwner?: ExpressionDropOwner; onChange: (value: InputValue) => void }) {
   const actualValue = value ?? input.defaultValue;
   const stopDrag = (event: MouseEvent) => event.stopPropagation();
@@ -3096,6 +3209,10 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
         <input type={input.secret ? "password" : "text"} value={String(actualValue)} placeholder={input.placeholder} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
       </label>
     );
+  }
+
+  if (input.type === "query") {
+    return <QueryParametersEditor label={input.label} value={String(actualValue)} onChange={onChange} />;
   }
 
   if (input.type === "boolean") {

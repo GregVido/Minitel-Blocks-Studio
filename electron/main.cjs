@@ -34,6 +34,7 @@ let testServerState = {
   endpoints: {
     get: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/test",
     post: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
+    put: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
   },
 };
 let testServerTransition = Promise.resolve(testServerState);
@@ -95,6 +96,7 @@ function setTestServerState(patch) {
     endpoints: {
       get: baseUrl + "/test",
       post: baseUrl + "/echo",
+      put: baseUrl + "/echo",
     },
   };
   broadcastTestServerState();

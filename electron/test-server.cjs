@@ -12,7 +12,7 @@ function normalizeTestServerPort(value, fallback = DEFAULT_TEST_SERVER_PORT) {
 function jsonHeaders() {
   return {
     "Access-Control-Allow-Headers": "Accept, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
@@ -63,6 +63,7 @@ async function handleTestRequest(request, response) {
   const endpoints = {
     get: "/test",
     post: "/echo",
+    put: "/echo",
   };
 
   if (url.pathname === "/") {
@@ -75,7 +76,7 @@ async function handleTestRequest(request, response) {
     return;
   }
 
-  if (url.pathname !== endpoints.get && url.pathname !== endpoints.post) {
+  if (url.pathname !== endpoints.get && url.pathname !== endpoints.post && url.pathname !== endpoints.put) {
     sendJson(response, 404, {
       ok: false,
       error: "Route inconnue.",
@@ -84,17 +85,17 @@ async function handleTestRequest(request, response) {
     return;
   }
 
-  if (request.method !== "GET" && request.method !== "POST") {
+  if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT") {
     sendJson(response, 405, {
       ok: false,
-      error: "Utilise une requête GET ou POST.",
+      error: "Utilise une requête GET, POST ou PUT.",
       endpoints,
     });
     return;
   }
 
   let body = null;
-  if (request.method === "POST") {
+  if (request.method === "POST" || request.method === "PUT") {
     try {
       const rawBody = await readRequestBody(request);
       body = rawBody ? JSON.parse(rawBody) : null;
@@ -113,7 +114,9 @@ async function handleTestRequest(request, response) {
     ok: true,
     message: request.method === "POST"
       ? "Requête POST reçue par Minitel Blocks Studio."
-      : "Bonjour depuis le serveur de test.",
+      : request.method === "PUT"
+        ? "Requête PUT reçue par Minitel Blocks Studio."
+        : "Bonjour depuis le serveur de test.",
     nombre: 42,
     method: request.method,
     path: url.pathname,

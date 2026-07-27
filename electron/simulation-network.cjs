@@ -43,8 +43,8 @@ function errorMessage(error) {
 
 async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
   const requestedUrl = String(rawUrl || "").trim();
-  const method = options.method === "POST" ? "POST" : "GET";
-  const requestBody = method === "POST" ? String(options.body ?? "{}") : undefined;
+  const method = options.method === "POST" || options.method === "PUT" ? options.method : "GET";
+  const requestBody = method === "GET" ? undefined : String(options.body ?? "{}");
   let parsedUrl;
   try {
     parsedUrl = new URL(requestedUrl);
@@ -64,7 +64,7 @@ async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
     try {
       JSON.parse(requestBody);
     } catch {
-      return { ok: false, url: requestedUrl, error: "Le corps POST n'est pas un JSON valide." };
+      return { ok: false, url: requestedUrl, error: "Le corps " + method + " n'est pas un JSON valide." };
     }
   }
   const controller = new AbortController();
@@ -77,7 +77,7 @@ async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
       signal: controller.signal,
       headers: {
         Accept: "application/json",
-        ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+        ...(method !== "GET" ? { "Content-Type": "application/json" } : {}),
       },
       ...(requestBody === undefined ? {} : { body: requestBody }),
     });

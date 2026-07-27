@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, net } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { fetchSimulationJson } = require("./simulation-network.cjs");
+const { DEFAULT_TEST_SERVER_PORT, createTestServerController, normalizeTestServerPort } = require("./test-server.cjs");
 const path = require("path");
 const os = require("os");
 const fs = require("fs/promises");
@@ -23,6 +24,20 @@ let updateInstallRequested = false;
 let updateInstallPreparing = false;
 let automaticUpdatesEnabled = true;
 let currentUpdateCheckAutomatic = false;
+const testServerController = createTestServerController();
+let testServerState = {
+  available: true,
+  enabled: true,
+  port: DEFAULT_TEST_SERVER_PORT,
+  running: false,
+  baseUrl: "http://localhost:" + DEFAULT_TEST_SERVER_PORT,
+  endpoints: {
+    get: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/test",
+    post: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
+  },
+};
+let testServerTransition = Promise.resolve(testServerState);
+let preferencesWriteQueue = Promise.resolve();
 const pendingRendererSaveRequests = new Map();
 const approvedWindowCloses = new WeakSet();
 const managedChildren = new Set();
@@ -35,24 +50,97 @@ function preferencesPath() {
   return path.join(app.getPath("userData"), APP_PREFERENCES_FILE);
 }
 
-async function readAutomaticUpdatesEnabled() {
+async function readAppPreferences() {
   try {
     const preferences = JSON.parse(await fs.readFile(preferencesPath(), "utf8"));
-    return preferences.automaticUpdatesEnabled !== false;
+    return preferences && typeof preferences === "object" && !Array.isArray(preferences) ? preferences : {};
   } catch {
-    return true;
+    return {};
   }
 }
 
-async function writeAutomaticUpdatesEnabled(enabled) {
-  let preferences = {};
-  try {
-    preferences = JSON.parse(await fs.readFile(preferencesPath(), "utf8"));
-  } catch {
-    // The file is created the first time a preference changes.
+function writeAppPreferences(patch) {
+  const write = preferencesWriteQueue.then(async () => {
+    const preferences = await readAppPreferences();
+    await fs.mkdir(app.getPath("userData"), { recursive: true });
+    await fs.writeFile(preferencesPath(), JSON.stringify({ ...preferences, ...patch }, null, 2) + "\n", "utf8");
+  });
+  preferencesWriteQueue = write.catch(() => undefined);
+  return write;
+}
+
+function publicTestServerState() {
+  return {
+    ...testServerState,
+    endpoints: { ...testServerState.endpoints },
+  };
+}
+
+function broadcastTestServerState() {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send("test-server-status", publicTestServerState());
+    }
   }
-  await fs.mkdir(app.getPath("userData"), { recursive: true });
-  await fs.writeFile(preferencesPath(), JSON.stringify({ ...preferences, automaticUpdatesEnabled: enabled }, null, 2) + "\n", "utf8");
+}
+
+function setTestServerState(patch) {
+  const port = normalizeTestServerPort(patch.port ?? testServerState.port);
+  const baseUrl = "http://localhost:" + port;
+  testServerState = {
+    ...testServerState,
+    ...patch,
+    port,
+    baseUrl,
+    endpoints: {
+      get: baseUrl + "/test",
+      post: baseUrl + "/echo",
+    },
+  };
+  broadcastTestServerState();
+  return publicTestServerState();
+}
+
+function testServerErrorMessage(error, port) {
+  if (error && error.code === "EADDRINUSE") return "Le port " + port + " est déjà utilisé.";
+  if (error && error.code === "EACCES") return "Le port " + port + " n'est pas autorisé.";
+  return "Le serveur local n'a pas pu démarrer.";
+}
+
+async function applyTestServerSettings(settings, options = {}) {
+  const enabled = Boolean(settings.enabled);
+  const port = normalizeTestServerPort(settings.port);
+  if (options.persist !== false) {
+    await writeAppPreferences({
+      testServerEnabled: enabled,
+      testServerPort: port,
+    });
+  }
+
+  if (!enabled) {
+    await testServerController.stop();
+    return setTestServerState({ enabled: false, port, running: false, error: undefined });
+  }
+
+  try {
+    const current = testServerController.status();
+    if (!current.running || current.port !== port) await testServerController.start(port);
+    return setTestServerState({ enabled: true, port, running: true, error: undefined });
+  } catch (error) {
+    console.error("Local test server startup failed:", error);
+    return setTestServerState({
+      enabled: true,
+      port,
+      running: false,
+      error: testServerErrorMessage(error, port),
+    });
+  }
+}
+
+function setTestServerSettings(settings, options = {}) {
+  const transition = testServerTransition.then(() => applyTestServerSettings(settings, options));
+  testServerTransition = transition.catch(() => publicTestServerState());
+  return transition;
 }
 
 function clearStartupUpdateTimer() {
@@ -107,6 +195,7 @@ function prepareForUpdateInstall() {
     startupUpdateTimer = null;
   }
   stopManagedChildren();
+  void testServerController.stop();
   releaseRuntimeSubst();
 }
 
@@ -263,7 +352,7 @@ async function setAutomaticUpdatesPreference(enabled) {
   const previous = automaticUpdatesEnabled;
   automaticUpdatesEnabled = Boolean(enabled);
   try {
-    await writeAutomaticUpdatesEnabled(automaticUpdatesEnabled);
+    await writeAppPreferences({ automaticUpdatesEnabled });
   } catch (error) {
     automaticUpdatesEnabled = previous;
     throw error;
@@ -336,7 +425,9 @@ function createWindow() {
   }
 
   mainWindow.webContents.on("did-finish-load", () => {
-    if (!mainWindow.isDestroyed()) mainWindow.webContents.send("app-update-status", { ...updateState });
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("app-update-status", { ...updateState });
+    mainWindow.webContents.send("test-server-status", publicTestServerState());
   });
 
   let closeRequestInFlight = false;
@@ -696,7 +787,12 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.whenReady().then(async () => {
-    automaticUpdatesEnabled = await readAutomaticUpdatesEnabled();
+    const preferences = await readAppPreferences();
+    automaticUpdatesEnabled = preferences.automaticUpdatesEnabled !== false;
+    await setTestServerSettings({
+      enabled: preferences.testServerEnabled !== false,
+      port: normalizeTestServerPort(preferences.testServerPort),
+    }, { persist: false });
     updateState = {
       ...updateState,
       status: isDevelopment || !automaticUpdatesEnabled ? "disabled" : "idle",
@@ -722,6 +818,7 @@ app.on("second-instance", () => {
 app.on("will-quit", () => {
   clearStartupUpdateTimer();
   stopManagedChildren();
+  void testServerController.stop();
   releaseRuntimeSubst();
 });
 
@@ -749,6 +846,15 @@ ipcMain.handle("set-automatic-updates-enabled", async (_event, payload) => {
 });
 
 ipcMain.handle("install-update", async () => installDownloadedUpdate());
+
+ipcMain.handle("get-test-server-status", async () => publicTestServerState());
+
+ipcMain.handle("set-test-server-settings", async (_event, payload) => {
+  return setTestServerSettings({
+    enabled: Boolean(payload && payload.enabled),
+    port: payload && payload.port,
+  });
+});
 
 ipcMain.handle("project-library:list", async () => {
   try {

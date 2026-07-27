@@ -61,6 +61,19 @@ interface SimulationHttpRequestPayload {
   body?: string;
 }
 
+interface TestServerStatus {
+  available: boolean;
+  enabled: boolean;
+  port: number;
+  running: boolean;
+  baseUrl: string;
+  endpoints: {
+    get: string;
+    post: string;
+  };
+  error?: string;
+}
+
 type AppUpdateStage = "idle" | "disabled" | "checking" | "available" | "downloading" | "ready" | "installing" | "up-to-date" | "error";
 
 interface AppUpdateStatus {
@@ -123,6 +136,9 @@ interface Window {
     listSerialPorts: () => Promise<ListSerialPortsResult>;
     uploadToEsp32: (payload: UploadEsp32Payload) => Promise<UploadEsp32Result>;
     fetchJsonForSimulation: (request: SimulationHttpRequestPayload) => Promise<SimulationHttpResult>;
+    getTestServerStatus: () => Promise<TestServerStatus>;
+    setTestServerSettings: (settings: { enabled: boolean; port: number }) => Promise<TestServerStatus>;
+    onTestServerStatus: (callback: (status: TestServerStatus) => void) => () => void;
     onUploadProgress: (callback: (progress: UploadProgress) => void) => () => void;
     getUpdateStatus: () => Promise<AppUpdateStatus>;
     checkForUpdates: () => Promise<AppUpdateStatus>;

@@ -28,6 +28,7 @@ import Repeat from "lucide-react/dist/esm/icons/repeat.js";
 import RotateCcw from "lucide-react/dist/esm/icons/rotate-ccw.js";
 import Settings2 from "lucide-react/dist/esm/icons/settings-2.js";
 import Save from "lucide-react/dist/esm/icons/save.js";
+import Server from "lucide-react/dist/esm/icons/server.js";
 import Sigma from "lucide-react/dist/esm/icons/sigma.js";
 import Sparkles from "lucide-react/dist/esm/icons/sparkles.js";
 import StepForward from "lucide-react/dist/esm/icons/step-forward.js";
@@ -371,6 +372,22 @@ const APP_THEME_STORAGE_KEY = "minitel-blocks-theme";
 const APP_AUTO_SAVE_STORAGE_KEY = "minitel-blocks-auto-save";
 const APP_AUTO_UPDATE_STORAGE_KEY = "minitel-blocks-auto-update";
 const AUTO_SAVE_DELAY_MS = 900;
+const DEFAULT_TEST_SERVER_PORT = 6663;
+
+function initialTestServerStatus(): TestServerStatus {
+  const baseUrl = "http://localhost:" + DEFAULT_TEST_SERVER_PORT;
+  return {
+    available: Boolean(window.minitelStudio?.getTestServerStatus),
+    enabled: true,
+    port: DEFAULT_TEST_SERVER_PORT,
+    running: false,
+    baseUrl,
+    endpoints: {
+      get: baseUrl + "/test",
+      post: baseUrl + "/echo",
+    },
+  };
+}
 
 function readInitialAppTheme(): AppTheme {
   try {
@@ -979,12 +996,12 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
   { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
-    { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/todos/1", placeholder: "https://api.exemple.fr/donnees" },
+    { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/test", placeholder: "http://localhost:6663/test" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "http-post-json", title: "requête POST JSON", help: "Envoie un corps JSON et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: "#087f70", inputs: [
-    { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/posts", placeholder: "https://api.exemple.fr/donnees" },
+    { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"bonjour\"}", placeholder: "{\"message\":\"bonjour\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
@@ -4085,8 +4102,66 @@ function VariableManager({ variables, onAdd, onChange, onRemove }: { variables: 
   );
 }
 
-function SettingsDialog({ open, theme, autoSaveEnabled, automaticUpdatesEnabled, onThemeChange, onAutoSaveChange, onAutomaticUpdatesChange, onClose }: { open: boolean; theme: AppTheme; autoSaveEnabled: boolean; automaticUpdatesEnabled: boolean; onThemeChange: (theme: AppTheme) => void; onAutoSaveChange: (enabled: boolean) => void; onAutomaticUpdatesChange: (enabled: boolean) => void; onClose: () => void }) {
+type SettingsDialogProps = {
+  open: boolean;
+  theme: AppTheme;
+  autoSaveEnabled: boolean;
+  automaticUpdatesEnabled: boolean;
+  testServer: TestServerStatus;
+  onThemeChange: (theme: AppTheme) => void;
+  onAutoSaveChange: (enabled: boolean) => void;
+  onAutomaticUpdatesChange: (enabled: boolean) => void;
+  onTestServerChange: (settings: { enabled: boolean; port: number }) => void;
+  onClose: () => void;
+};
+
+function SettingsDialog({
+  open,
+  theme,
+  autoSaveEnabled,
+  automaticUpdatesEnabled,
+  testServer,
+  onThemeChange,
+  onAutoSaveChange,
+  onAutomaticUpdatesChange,
+  onTestServerChange,
+  onClose,
+}: SettingsDialogProps) {
+  const [portDraft, setPortDraft] = useState(String(testServer.port));
+
+  useEffect(() => {
+    if (open) setPortDraft(String(testServer.port));
+  }, [open, testServer.port]);
+
   if (!open) return null;
+
+  const commitPort = () => {
+    const parsedPort = Math.trunc(Number(portDraft));
+    const port = Number.isFinite(parsedPort) ? clamp(parsedPort, 1024, 65535) : testServer.port;
+    setPortDraft(String(port));
+    if (port !== testServer.port) onTestServerChange({ enabled: testServer.enabled, port });
+  };
+  const statusKind = !testServer.available
+    ? "unavailable"
+    : testServer.error
+      ? "error"
+      : testServer.running
+        ? "online"
+        : "idle";
+  const statusTitle = !testServer.available
+    ? "Application installée requise"
+    : testServer.error
+      ? "Impossible de démarrer"
+      : testServer.running
+        ? "En ligne"
+        : testServer.enabled
+          ? "Démarrage..."
+          : "Arrêté";
+  const statusDetail = testServer.error || (testServer.running ? testServer.baseUrl : "Port " + testServer.port);
+  const copyUrl = (url: string) => {
+    void navigator.clipboard?.writeText(url);
+  };
+
   return (
     <div className="settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -4111,6 +4186,38 @@ function SettingsDialog({ open, theme, autoSaveEnabled, automaticUpdatesEnabled,
             <span className="settings-toggle-copy"><strong>Mises à jour automatiques</strong><small>{automaticUpdatesEnabled ? "Activées" : "Désactivées"}</small></span>
             <span className={"settings-switch" + (automaticUpdatesEnabled ? " active" : "")} aria-hidden="true"><i /></span>
           </button>
+          <div className="settings-section-title"><Server size={17} /><span>Serveur de test</span></div>
+          <button type="button" className="settings-toggle-row" role="switch" aria-checked={testServer.enabled} disabled={!testServer.available} onClick={() => onTestServerChange({ enabled: !testServer.enabled, port: testServer.port })}>
+            <span className="settings-toggle-copy"><strong>Démarrer avec l'application</strong><small>{testServer.enabled ? "Activé" : "Désactivé"}</small></span>
+            <span className={"settings-switch" + (testServer.enabled ? " active" : "")} aria-hidden="true"><i /></span>
+          </button>
+          <div className="settings-server-panel">
+            <label className="settings-server-port" htmlFor="settings-test-server-port">
+              <span>Port</span>
+              <input
+                id="settings-test-server-port"
+                type="number"
+                min={1024}
+                max={65535}
+                step={1}
+                inputMode="numeric"
+                value={portDraft}
+                disabled={!testServer.available}
+                onChange={(event) => setPortDraft(event.currentTarget.value.replace(/\D/g, "").slice(0, 5))}
+                onBlur={commitPort}
+                onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+              />
+            </label>
+            <div className={"settings-server-status " + statusKind}>
+              <i aria-hidden="true" />
+              <span><strong>{statusTitle}</strong><small>{statusDetail}</small></span>
+              <button type="button" onClick={() => onTestServerChange({ enabled: true, port: testServer.port })} disabled={!testServer.available || !testServer.enabled || testServer.running} title="Réessayer le démarrage"><RefreshCw size={15} /></button>
+            </div>
+            <div className="settings-server-links" aria-label="Adresses du serveur de test">
+              <div><span>GET</span><code>{testServer.endpoints.get}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.get)} title="Copier l'adresse GET"><Copy size={14} /></button></div>
+              <div><span>POST</span><code>{testServer.endpoints.post}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.post)} title="Copier l'adresse POST"><Copy size={14} /></button></div>
+            </div>
+          </div>
         </div>
         <footer className="settings-footer"><button type="button" onClick={onClose}>Terminé</button></footer>
       </section>
@@ -4126,6 +4233,7 @@ function App() {
   const [theme, setTheme] = useState<AppTheme>(initialAppTheme);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(initialAutoSaveEnabled);
   const [automaticUpdatesEnabled, setAutomaticUpdatesEnabled] = useState(initialAutomaticUpdatesEnabled);
+  const [testServer, setTestServer] = useState<TestServerStatus>(initialTestServerStatus);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projects, setProjects] = useState<ManagedProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -4194,12 +4302,26 @@ function App() {
       color: variableValueType(variable) === "text" ? "#e75669" : "#f25f5c",
       output: variableReferenceExpr(variable),
     })), [variables]);
-  const paletteDefinitionById = useMemo(() => [...blockDefinitions, ...variableValueBlocks]
+  const paletteBlockDefinitions = useMemo(() => blockDefinitions.map((definition) => {
+    const endpoint = definition.id === "http-get-json"
+      ? testServer.endpoints.get
+      : definition.id === "http-post-json"
+        ? testServer.endpoints.post
+        : "";
+    if (!endpoint) return definition;
+    return {
+      ...definition,
+      inputs: definition.inputs?.map((input) => input.key === "url"
+        ? { ...input, defaultValue: endpoint, placeholder: endpoint }
+        : input),
+    };
+  }), [testServer.endpoints.get, testServer.endpoints.post]);
+  const paletteDefinitionById = useMemo(() => [...paletteBlockDefinitions, ...variableValueBlocks]
     .reduce<Record<string, BlockDefinition>>((definitions, definition) => {
       definitions[definition.id] = definition;
       return definitions;
-    }, {}), [variableValueBlocks]);
-  const categoryBlocks = blockDefinitions.filter((definition) => definition.category === activeCategory);
+    }, {}), [paletteBlockDefinitions, variableValueBlocks]);
+  const categoryBlocks = paletteBlockDefinitions.filter((definition) => definition.category === activeCategory);
   const activeBlocks = activeCategory === "variables" ? [...variableValueBlocks, ...categoryBlocks] : categoryBlocks;
   const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
   const sceneElements = activeScreen?.elements ?? [];
@@ -4823,6 +4945,23 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const bridge = window.minitelStudio;
+    if (!bridge?.getTestServerStatus || !bridge.onTestServerStatus) return undefined;
+    let active = true;
+    const applyStatus = (status: TestServerStatus) => {
+      if (active) setTestServer(status);
+    };
+    const unsubscribe = bridge.onTestServerStatus(applyStatus);
+    void bridge.getTestServerStatus()
+      .then(applyStatus)
+      .catch(() => undefined);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       Object.values(motionTimersRef.current).forEach((timer) => window.clearTimeout(timer));
       deleteTimersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -4849,6 +4988,8 @@ function App() {
   function makeProjectBlock(definitionId: string) {
     const block = makeBlock(definitionId);
     if (definitionId === "draw-screen") block.values.screen = activeScreen?.id ?? screens[0]?.id ?? "";
+    if (definitionId === "http-get-json") block.values.url = testServer.endpoints.get;
+    if (definitionId === "http-post-json") block.values.url = testServer.endpoints.post;
     blockById[definitionId]?.inputs?.forEach((input) => {
       if (input.type !== "variable") return;
       const compatibleVariables = input.variableType === "any"
@@ -5594,6 +5735,31 @@ function App() {
     }
   }
 
+  async function changeTestServerSettings(settings: { enabled: boolean; port: number }) {
+    const bridge = window.minitelStudio;
+    if (!bridge?.setTestServerSettings) return;
+    const previous = testServer;
+    const port = clamp(Math.trunc(Number(settings.port)) || previous.port, 1024, 65535);
+    setTestServer({
+      ...previous,
+      enabled: settings.enabled,
+      port,
+      running: settings.enabled && port === previous.port ? previous.running : false,
+      error: undefined,
+      baseUrl: "http://localhost:" + port,
+      endpoints: {
+        get: "http://localhost:" + port + "/test",
+        post: "http://localhost:" + port + "/echo",
+      },
+    });
+    try {
+      setTestServer(await bridge.setTestServerSettings({ enabled: settings.enabled, port }));
+    } catch {
+      setTestServer(previous);
+      flashNotice("Impossible d'enregistrer le serveur de test");
+    }
+  }
+
   async function handleAppUpdate() {
     const bridge = window.minitelStudio;
     if (!appUpdate || !bridge) return;
@@ -5661,7 +5827,7 @@ function App() {
           onDelete={deleteManagedProject}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} testServer={testServer} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onTestServerChange={(settings) => void changeTestServerSettings(settings)} onClose={() => setSettingsOpen(false)} />
       </>
     );
   }
@@ -5862,7 +6028,7 @@ function App() {
         </div>
       ) : null}
 
-      <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} testServer={testServer} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onTestServerChange={(settings) => void changeTestServerSettings(settings)} onClose={() => setSettingsOpen(false)} />
       <div className={"notice " + (notice ? "show" : "")}>{notice}</div>
     </div>
   );

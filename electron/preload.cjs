@@ -21,6 +21,14 @@ contextBridge.exposeInMainWorld("minitelStudio", {
     ipcRenderer.invoke("upload-esp32", { code, board, port }),
   fetchJsonForSimulation: (request) =>
     ipcRenderer.invoke("simulation:http-request-json", request),
+  getTestServerStatus: () => ipcRenderer.invoke("get-test-server-status"),
+  setTestServerSettings: ({ enabled, port }) =>
+    ipcRenderer.invoke("set-test-server-settings", { enabled, port }),
+  onTestServerStatus: (callback) => {
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("test-server-status", listener);
+    return () => ipcRenderer.removeListener("test-server-status", listener);
+  },
   onUploadProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);
     ipcRenderer.on("esp32-upload-progress", listener);

@@ -113,6 +113,19 @@ Dans le bloc **quand la touche**, les choix sont classés par famille : lettres,
 
 La simulation suit le format choisi et affiche les écrans au moment où elle rencontre un bloc **dessiner l'écran**.
 
+## Tester les requêtes réseau
+
+L'application démarre un petit serveur JSON local prêt à être utilisé dans la simulation :
+
+- le bloc **requête GET JSON** utilise `http://localhost:6663/test` ;
+- le bloc **requête POST JSON** utilise `http://localhost:6663/echo`.
+
+La réponse GET contient un message, un nombre et les paramètres query reçus. La réponse POST renvoie également le corps JSON envoyé, ce qui permet de vérifier immédiatement les blocs de lecture JSON.
+
+Dans **Paramètres > Serveur de test**, le démarrage automatique peut être désactivé et le port peut être modifié. Les nouveaux blocs réseau utilisent alors automatiquement les adresses correspondant à ce port.
+
+Ces adresses `localhost` servent au simulateur sur l'ordinateur. Après téléversement, l'ESP32 doit utiliser l'adresse d'un serveur accessible depuis son réseau Wi-Fi.
+
 ## Câbler l'ESP32 au Minitel
 
 ![Schema de cablage](public/schema.png)

@@ -12,7 +12,7 @@ function normalizeTestServerPort(value, fallback = DEFAULT_TEST_SERVER_PORT) {
 function jsonHeaders() {
   return {
     "Access-Control-Allow-Headers": "Accept, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
@@ -64,6 +64,7 @@ async function handleTestRequest(request, response) {
     get: "/test",
     post: "/echo",
     put: "/echo",
+    delete: "/echo",
   };
 
   if (url.pathname === "/") {
@@ -76,7 +77,7 @@ async function handleTestRequest(request, response) {
     return;
   }
 
-  if (url.pathname !== endpoints.get && url.pathname !== endpoints.post && url.pathname !== endpoints.put) {
+  if (!Object.values(endpoints).includes(url.pathname)) {
     sendJson(response, 404, {
       ok: false,
       error: "Route inconnue.",
@@ -85,10 +86,10 @@ async function handleTestRequest(request, response) {
     return;
   }
 
-  if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT") {
+  if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT" && request.method !== "DELETE") {
     sendJson(response, 405, {
       ok: false,
-      error: "Utilise une requête GET, POST ou PUT.",
+      error: "Utilise une requête GET, POST, PUT ou DELETE.",
       endpoints,
     });
     return;
@@ -116,7 +117,9 @@ async function handleTestRequest(request, response) {
       ? "Requête POST reçue par Minitel Blocks Studio."
       : request.method === "PUT"
         ? "Requête PUT reçue par Minitel Blocks Studio."
-        : "Bonjour depuis le serveur de test.",
+        : request.method === "DELETE"
+          ? "Requête DELETE reçue par Minitel Blocks Studio."
+          : "Bonjour depuis le serveur de test.",
     nombre: 42,
     method: request.method,
     path: url.pathname,

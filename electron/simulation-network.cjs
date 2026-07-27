@@ -43,8 +43,8 @@ function errorMessage(error) {
 
 async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
   const requestedUrl = String(rawUrl || "").trim();
-  const method = options.method === "POST" || options.method === "PUT" ? options.method : "GET";
-  const requestBody = method === "GET" ? undefined : String(options.body ?? "{}");
+  const method = options.method === "POST" || options.method === "PUT" || options.method === "DELETE" ? options.method : "GET";
+  const requestBody = method === "POST" || method === "PUT" ? String(options.body ?? "{}") : undefined;
   let parsedUrl;
   try {
     parsedUrl = new URL(requestedUrl);
@@ -77,7 +77,7 @@ async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
       signal: controller.signal,
       headers: {
         Accept: "application/json",
-        ...(method !== "GET" ? { "Content-Type": "application/json" } : {}),
+        ...(requestBody !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       ...(requestBody === undefined ? {} : { body: requestBody }),
     });

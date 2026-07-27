@@ -321,7 +321,7 @@ type SimulationHttpState = {
 
 type SimulationHttpRequest = {
   key: string;
-  method: "GET" | "POST" | "PUT";
+  method: "GET" | "POST" | "PUT" | "DELETE";
   url: string;
   body?: string;
 };
@@ -386,6 +386,7 @@ function initialTestServerStatus(): TestServerStatus {
       get: baseUrl + "/test",
       post: baseUrl + "/echo",
       put: baseUrl + "/echo",
+      delete: baseUrl + "/echo",
     },
   };
 }
@@ -584,7 +585,7 @@ function simulationHttpRequest(
   variables: Record<string, number | string> = {},
 ): SimulationHttpRequest {
   const url = httpRequestUrl(values, variables);
-  const body = method === "GET" ? undefined : textValue(values.body, "{}");
+  const body = method === "POST" || method === "PUT" ? textValue(values.body, "{}") : undefined;
   return {
     key: JSON.stringify([method, url, body ?? ""]),
     method,
@@ -608,7 +609,9 @@ function collectSimulationHttpRequests(
           ? "POST"
           : block.definitionId === "http-put-json"
             ? "PUT"
-            : null;
+            : block.definitionId === "http-delete-json"
+              ? "DELETE"
+              : null;
       if (method) {
         const request = simulationHttpRequest(method, block.values, variables);
         if (request.url) requests.set(request.key, request);
@@ -625,9 +628,9 @@ function collectSimulationHttpRequests(
 
 async function requestSimulationJson(request: SimulationHttpRequest): Promise<SimulationHttpResult> {
   const { method, url } = request;
-  const requestBody = method === "GET" ? undefined : request.body ?? "{}";
+  const requestBody = method === "POST" || method === "PUT" ? request.body ?? "{}" : undefined;
   try {
-    if (method !== "GET") {
+    if (method === "POST" || method === "PUT") {
       if (new TextEncoder().encode(requestBody ?? "").byteLength > 2 * 1024 * 1024) {
         return { ok: false, url, error: "Le corps JSON dépasse la limite de 2 Mo." };
       }
@@ -653,7 +656,7 @@ async function requestSimulationJson(request: SimulationHttpRequest): Promise<Si
         method,
         redirect: "follow",
         signal: controller.signal,
-        headers: method !== "GET"
+        headers: requestBody !== undefined
           ? { Accept: "application/json", "Content-Type": "application/json" }
           : { Accept: "application/json" },
         body: requestBody,
@@ -1013,6 +1016,11 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"mise à jour\"}", placeholder: "{\"message\":\"mise à jour\"}" },
+    { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+  ] },
+  { id: "http-delete-json", title: "requête DELETE JSON", help: "Supprime une ressource et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: "#c05268", inputs: [
+    { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
+    { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "network", color: "#138c7d", inputs: [
@@ -2042,7 +2050,7 @@ function appendHttpJsonRequestCode(
   indent: number,
   values: Values,
   variables: VariableDef[],
-  method: "GET" | "POST" | "PUT",
+  method: "GET" | "POST" | "PUT" | "DELETE",
 ) {
   const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
   const queryEntries = queryEntriesFromValue(values.query);
@@ -2050,7 +2058,9 @@ function appendHttpJsonRequestCode(
     ? "mbsHttpPostJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
     : method === "PUT"
       ? "mbsHttpPutJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
-      : "mbsHttpGetJson(" + urlExpression + ")";
+      : method === "DELETE"
+        ? "mbsHttpDeleteJson(" + urlExpression + ")"
+        : "mbsHttpGetJson(" + urlExpression + ")";
 
   if (queryEntries.length === 0) {
     pushLine(lines, indent, target + " = " + requestExpression(cppString(textValue(values.url, ""))) + ";");
@@ -2207,6 +2217,9 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "http-put-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "PUT");
         break;
+      case "http-delete-json":
+        appendHttpJsonRequestCode(lines, indent, values, variables, "DELETE");
+        break;
       case "json-read-text":
         pushLine(lines, indent, "mbsJsonReadText(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "texte")) + ");");
         break;
@@ -2315,7 +2328,8 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const variableTypes = collectVariableTypes(stacks, variables);
   const usesHttpPost = projectUsesBlock(stacks, "http-post-json");
   const usesHttpPut = projectUsesBlock(stacks, "http-put-json");
-  const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut;
+  const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
+  const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpDelete;
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
@@ -2506,6 +2520,28 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       "  http.addHeader(\"Accept\", \"application/json\");",
       "  http.addHeader(\"Content-Type\", \"application/json\");",
       "  const int status = http.PUT(body);",
+      "  String response = status >= 200 && status < 300 ? http.getString() : String();",
+      "  http.end();",
+      "  if (response.length() == 0) return String();",
+      "  cJSON *document = cJSON_Parse(response.c_str());",
+      "  if (document == nullptr) return String();",
+      "  cJSON_Delete(document);",
+      "  return response;",
+      "}",
+    );
+  }
+
+  if (usesHttpDelete) {
+    lines.push(
+      "",
+      "String mbsHttpDeleteJson(const String &url) {",
+      "  if (WiFi.status() != WL_CONNECTED || url.length() == 0) return String();",
+      "  HTTPClient http;",
+      "  http.setTimeout(10000);",
+      "  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);",
+      "  if (!http.begin(url)) return String();",
+      "  http.addHeader(\"Accept\", \"application/json\");",
+      "  const int status = http.sendRequest(\"DELETE\");",
       "  String response = status >= 200 && status < 300 ? http.getString() : String();",
       "  http.end();",
       "  if (response.length() == 0) return String();",
@@ -2827,6 +2863,24 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
           state.messages.push((result.body ? "Derni\u00e8re r\u00e9ponse conserv\u00e9e \u00b7 " : "PUT impossible \u00b7 ") + (result.error || "Erreur r\u00e9seau"));
         } else {
           state.messages.push("PUT " + (result.statusCode || 200) + " \u2192 " + target);
+        }
+        break;
+      }
+      case "http-delete-json": {
+        const target = textValue(values.target, "reponseJson");
+        const request = simulationHttpRequest("DELETE", values, state.variables);
+        const result = httpResults[request.key];
+        state.variables[target] = result?.body ?? "";
+        if (!request.url) {
+          state.messages.push("DELETE JSON : URL manquante");
+        } else if (!result) {
+          state.messages.push("DELETE JSON : lance la simulation");
+        } else if (result.status === "loading") {
+          state.messages.push(result.body ? "DELETE JSON : actualisation\u2026" : "DELETE JSON en cours\u2026");
+        } else if (result.status === "error") {
+          state.messages.push((result.body ? "Derni\u00e8re r\u00e9ponse conserv\u00e9e \u00b7 " : "DELETE impossible \u00b7 ") + (result.error || "Erreur r\u00e9seau"));
+        } else {
+          state.messages.push("DELETE " + (result.statusCode || 200) + " \u2192 " + target);
         }
         break;
       }
@@ -4273,6 +4327,7 @@ function SettingsDialog({
               <div><span>GET</span><code>{testServer.endpoints.get}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.get)} title="Copier l'adresse GET"><Copy size={14} /></button></div>
               <div><span>POST</span><code>{testServer.endpoints.post}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.post)} title="Copier l'adresse POST"><Copy size={14} /></button></div>
               <div><span>PUT</span><code>{testServer.endpoints.put}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.put)} title="Copier l'adresse PUT"><Copy size={14} /></button></div>
+              <div><span>DELETE</span><code>{testServer.endpoints.delete}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.delete)} title="Copier l'adresse DELETE"><Copy size={14} /></button></div>
             </div>
           </div>
         </div>
@@ -4366,7 +4421,9 @@ function App() {
         ? testServer.endpoints.post
         : definition.id === "http-put-json"
           ? testServer.endpoints.put
-          : "";
+          : definition.id === "http-delete-json"
+            ? testServer.endpoints.delete
+            : "";
     if (!endpoint) return definition;
     return {
       ...definition,
@@ -4374,7 +4431,7 @@ function App() {
         ? { ...input, defaultValue: endpoint, placeholder: endpoint }
         : input),
     };
-  }), [testServer.endpoints.get, testServer.endpoints.post, testServer.endpoints.put]);
+  }), [testServer.endpoints.get, testServer.endpoints.post, testServer.endpoints.put, testServer.endpoints.delete]);
   const paletteDefinitionById = useMemo(() => [...paletteBlockDefinitions, ...variableValueBlocks]
     .reduce<Record<string, BlockDefinition>>((definitions, definition) => {
       definitions[definition.id] = definition;
@@ -5050,6 +5107,7 @@ function App() {
     if (definitionId === "http-get-json") block.values.url = testServer.endpoints.get;
     if (definitionId === "http-post-json") block.values.url = testServer.endpoints.post;
     if (definitionId === "http-put-json") block.values.url = testServer.endpoints.put;
+    if (definitionId === "http-delete-json") block.values.url = testServer.endpoints.delete;
     blockById[definitionId]?.inputs?.forEach((input) => {
       if (input.type !== "variable") return;
       const compatibleVariables = input.variableType === "any"
@@ -5811,6 +5869,7 @@ function App() {
         get: "http://localhost:" + port + "/test",
         post: "http://localhost:" + port + "/echo",
         put: "http://localhost:" + port + "/echo",
+        delete: "http://localhost:" + port + "/echo",
       },
     });
     try {

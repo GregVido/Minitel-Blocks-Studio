@@ -851,8 +851,11 @@ ipcMain.handle("import-project", async () => {
   }
 });
 
-ipcMain.handle("simulation:http-get-json", async (_event, payload) => {
-  return fetchSimulationJson((url, options) => net.fetch(url, options), payload && payload.url);
+ipcMain.handle("simulation:http-request-json", async (_event, payload) => {
+  return fetchSimulationJson((url, options) => net.fetch(url, options), payload && payload.url, {
+    method: payload && payload.method,
+    body: payload && payload.body,
+  });
 });
 
 ipcMain.handle("list-serial-ports", async () => ({

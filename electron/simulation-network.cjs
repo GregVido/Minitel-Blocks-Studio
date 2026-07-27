@@ -43,6 +43,8 @@ function errorMessage(error) {
 
 async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
   const requestedUrl = String(rawUrl || "").trim();
+  const method = options.method === "POST" ? "POST" : "GET";
+  const requestBody = method === "POST" ? String(options.body ?? "{}") : undefined;
   let parsedUrl;
   try {
     parsedUrl = new URL(requestedUrl);
@@ -55,15 +57,29 @@ async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
 
   const timeoutMs = Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS;
   const maxBytes = Number(options.maxBytes) || DEFAULT_MAX_RESPONSE_BYTES;
+  if (requestBody !== undefined) {
+    if (Buffer.byteLength(requestBody, "utf8") > maxBytes) {
+      return { ok: false, url: requestedUrl, error: "Le corps JSON depasse la limite autorisee." };
+    }
+    try {
+      JSON.parse(requestBody);
+    } catch {
+      return { ok: false, url: requestedUrl, error: "Le corps POST n'est pas un JSON valide." };
+    }
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetchImplementation(parsedUrl.toString(), {
-      method: "GET",
+      method,
       redirect: "follow",
       signal: controller.signal,
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(requestBody === undefined ? {} : { body: requestBody }),
     });
     const resolvedUrl = response.url || parsedUrl.toString();
     const body = await readResponseBody(response, maxBytes);

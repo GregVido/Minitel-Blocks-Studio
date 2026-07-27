@@ -318,6 +318,13 @@ type SimulationHttpState = {
   error?: string;
 };
 
+type SimulationHttpRequest = {
+  key: string;
+  method: "GET" | "POST";
+  url: string;
+  body?: string;
+};
+
 type UploadResult = {
   ok: boolean;
   output: string;
@@ -553,18 +560,38 @@ function replaceQueryVariableReference(rawQuery: unknown, previousName: string, 
   })));
 }
 
-function collectSimulationHttpUrls(
+function simulationHttpRequest(
+  method: SimulationHttpRequest["method"],
+  values: Values,
+  variables: Record<string, number | string> = {},
+): SimulationHttpRequest {
+  const url = httpRequestUrl(values, variables);
+  const body = method === "POST" ? textValue(values.body, "{}") : undefined;
+  return {
+    key: JSON.stringify([method, url, body ?? ""]),
+    method,
+    url,
+    body,
+  };
+}
+
+function collectSimulationHttpRequests(
   stacks: ScriptStack[],
   variables: Record<string, number | string> = {},
   eventDefinitionIds?: string[],
 ) {
-  const urls = new Set<string>();
+  const requests = new Map<string, SimulationHttpRequest>();
   const allowedEvents = eventDefinitionIds ? new Set(eventDefinitionIds) : null;
   const visit = (blocks: ProgramBlock[]) => {
     blocks.forEach((block) => {
-      if (block.definitionId === "http-get-json") {
-        const url = httpRequestUrl(block.values, variables);
-        if (url) urls.add(url);
+      const method = block.definitionId === "http-get-json"
+        ? "GET"
+        : block.definitionId === "http-post-json"
+          ? "POST"
+          : null;
+      if (method) {
+        const request = simulationHttpRequest(method, block.values, variables);
+        if (request.url) requests.set(request.key, request);
       }
       visit(block.children ?? []);
       visit(block.elseChildren ?? []);
@@ -573,13 +600,26 @@ function collectSimulationHttpUrls(
   stacks.forEach((stack) => {
     if (!allowedEvents || allowedEvents.has(stack.event.definitionId)) visit(stack.blocks);
   });
-  return Array.from(urls);
+  return Array.from(requests.values());
 }
 
-async function requestSimulationJson(url: string): Promise<SimulationHttpGetResult> {
+async function requestSimulationJson(request: SimulationHttpRequest): Promise<SimulationHttpResult> {
+  const { method, url } = request;
+  const requestBody = method === "POST" ? request.body ?? "{}" : undefined;
   try {
+    if (method === "POST") {
+      if (new TextEncoder().encode(requestBody ?? "").byteLength > 2 * 1024 * 1024) {
+        return { ok: false, url, error: "Le corps JSON dépasse la limite de 2 Mo." };
+      }
+      try {
+        JSON.parse(requestBody ?? "");
+      } catch {
+        return { ok: false, url, error: "Le corps POST n'est pas un JSON valide." };
+      }
+    }
+
     if (window.minitelStudio?.fetchJsonForSimulation) {
-      return await window.minitelStudio.fetchJsonForSimulation(url);
+      return await window.minitelStudio.fetchJsonForSimulation({ method, url, body: requestBody });
     }
 
     const parsedUrl = new URL(url);
@@ -590,28 +630,31 @@ async function requestSimulationJson(url: string): Promise<SimulationHttpGetResu
     const timeout = window.setTimeout(() => controller.abort(), 10000);
     try {
       const response = await fetch(parsedUrl.toString(), {
-        method: "GET",
+        method,
         redirect: "follow",
         signal: controller.signal,
-        headers: { Accept: "application/json" },
+        headers: method === "POST"
+          ? { Accept: "application/json", "Content-Type": "application/json" }
+          : { Accept: "application/json" },
+        body: requestBody,
       });
       const declaredLength = Number(response.headers.get("content-length") || 0);
       if (Number.isFinite(declaredLength) && declaredLength > 2 * 1024 * 1024) {
         return { ok: false, url: response.url || url, status: response.status, error: "La réponse JSON dépasse la limite de 2 Mo." };
       }
-      const body = await response.text();
-      if (new TextEncoder().encode(body).byteLength > 2 * 1024 * 1024) {
+      const responseBody = await response.text();
+      if (new TextEncoder().encode(responseBody).byteLength > 2 * 1024 * 1024) {
         return { ok: false, url: response.url || url, status: response.status, error: "La réponse JSON dépasse la limite de 2 Mo." };
       }
       if (!response.ok) {
         return { ok: false, url: response.url || url, status: response.status, error: "Le serveur a répondu avec le code HTTP " + response.status + "." };
       }
       try {
-        JSON.parse(body);
+        JSON.parse(responseBody);
       } catch {
         return { ok: false, url: response.url || url, status: response.status, error: "La réponse reçue n'est pas un JSON valide." };
       }
-      return { ok: true, url: response.url || url, status: response.status, body };
+      return { ok: true, url: response.url || url, status: response.status, body: responseBody };
     } finally {
       window.clearTimeout(timeout);
     }
@@ -938,6 +981,12 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/todos/1", placeholder: "https://api.exemple.fr/donnees" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
+    { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+  ] },
+  { id: "http-post-json", title: "requête POST JSON", help: "Envoie un corps JSON et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: "#087f70", inputs: [
+    { key: "url", label: "URL", type: "text", defaultValue: "https://jsonplaceholder.typicode.com/posts", placeholder: "https://api.exemple.fr/donnees" },
+    { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
+    { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"bonjour\"}", placeholder: "{\"message\":\"bonjour\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "network", color: "#138c7d", inputs: [
@@ -1962,6 +2011,33 @@ function queryPartCode(value: string, variables: VariableDef[]) {
     : "String()";
 }
 
+function appendHttpJsonRequestCode(
+  lines: string[],
+  indent: number,
+  values: Values,
+  variables: VariableDef[],
+  method: "GET" | "POST",
+) {
+  const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
+  const queryEntries = queryEntriesFromValue(values.query);
+  const requestExpression = (urlExpression: string) => method === "POST"
+    ? "mbsHttpPostJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
+    : "mbsHttpGetJson(" + urlExpression + ")";
+
+  if (queryEntries.length === 0) {
+    pushLine(lines, indent, target + " = " + requestExpression(cppString(textValue(values.url, ""))) + ";");
+    return;
+  }
+
+  pushLine(lines, indent, "{");
+  pushLine(lines, indent + 2, "String mbsUrl = " + cppString(textValue(values.url, "")) + ";");
+  queryEntries.forEach((entry) => {
+    pushLine(lines, indent + 2, "mbsAppendQuery(mbsUrl, " + queryPartCode(entry.key, variables) + ", " + queryPartCode(entry.value, variables) + ");");
+  });
+  pushLine(lines, indent + 2, target + " = " + requestExpression("mbsUrl") + ";");
+  pushLine(lines, indent, "}");
+}
+
 function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number, variables: VariableDef[], context?: CodeContext) {
   blocks.forEach((block) => {
     const values = block.values;
@@ -2094,22 +2170,12 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
-      case "http-get-json": {
-        const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
-        const queryEntries = queryEntriesFromValue(values.query);
-        if (queryEntries.length === 0) {
-          pushLine(lines, indent, target + " = mbsHttpGetJson(" + cppString(textValue(values.url, "")) + ");");
-          break;
-        }
-        pushLine(lines, indent, "{");
-        pushLine(lines, indent + 2, "String mbsUrl = " + cppString(textValue(values.url, "")) + ";");
-        queryEntries.forEach((entry) => {
-          pushLine(lines, indent + 2, "mbsAppendQuery(mbsUrl, " + queryPartCode(entry.key, variables) + ", " + queryPartCode(entry.value, variables) + ");");
-        });
-        pushLine(lines, indent + 2, target + " = mbsHttpGetJson(mbsUrl);");
-        pushLine(lines, indent, "}");
+      case "http-get-json":
+        appendHttpJsonRequestCode(lines, indent, values, variables, "GET");
         break;
-      }
+      case "http-post-json":
+        appendHttpJsonRequestCode(lines, indent, values, variables, "POST");
+        break;
       case "json-read-text":
         pushLine(lines, indent, "mbsJsonReadText(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "texte")) + ");");
         break;
@@ -2216,7 +2282,8 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const variableTypes = collectVariableTypes(stacks, variables);
-  const usesHttp = projectUsesBlock(stacks, "http-get-json");
+  const usesHttpPost = projectUsesBlock(stacks, "http-post-json");
+  const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost;
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
@@ -2361,6 +2428,29 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       "  if (!http.begin(url)) return String();",
       "  http.addHeader(\"Accept\", \"application/json\");",
       "  const int status = http.GET();",
+      "  String response = status >= 200 && status < 300 ? http.getString() : String();",
+      "  http.end();",
+      "  if (response.length() == 0) return String();",
+      "  cJSON *document = cJSON_Parse(response.c_str());",
+      "  if (document == nullptr) return String();",
+      "  cJSON_Delete(document);",
+      "  return response;",
+      "}",
+    );
+  }
+
+  if (usesHttpPost) {
+    lines.push(
+      "",
+      "String mbsHttpPostJson(const String &url, const String &body) {",
+      "  if (WiFi.status() != WL_CONNECTED || url.length() == 0) return String();",
+      "  HTTPClient http;",
+      "  http.setTimeout(10000);",
+      "  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);",
+      "  if (!http.begin(url)) return String();",
+      "  http.addHeader(\"Accept\", \"application/json\");",
+      "  http.addHeader(\"Content-Type\", \"application/json\");",
+      "  const int status = http.POST(body);",
       "  String response = status >= 200 && status < 300 ? http.getString() : String();",
       "  http.end();",
       "  if (response.length() == 0) return String();",
@@ -2633,19 +2723,37 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       }
       case "http-get-json": {
         const target = textValue(values.target, "reponseJson");
-        const url = httpRequestUrl(values, state.variables);
-        const result = httpResults[url];
+        const request = simulationHttpRequest("GET", values, state.variables);
+        const result = httpResults[request.key];
         state.variables[target] = result?.body ?? "";
-        if (!url) {
+        if (!request.url) {
           state.messages.push("GET JSON : URL manquante");
         } else if (!result) {
           state.messages.push("GET JSON : lance la simulation");
         } else if (result.status === "loading") {
-          state.messages.push(result.body ? "GET JSON : actualisation…" : "GET JSON en cours…");
+          state.messages.push(result.body ? "GET JSON : actualisation\u2026" : "GET JSON en cours\u2026");
         } else if (result.status === "error") {
-          state.messages.push((result.body ? "Dernière réponse conservée · " : "GET impossible · ") + (result.error || "Erreur réseau"));
+          state.messages.push((result.body ? "Derni\u00e8re r\u00e9ponse conserv\u00e9e \u00b7 " : "GET impossible \u00b7 ") + (result.error || "Erreur r\u00e9seau"));
         } else {
-          state.messages.push("GET " + (result.statusCode || 200) + " → " + target);
+          state.messages.push("GET " + (result.statusCode || 200) + " \u2192 " + target);
+        }
+        break;
+      }
+      case "http-post-json": {
+        const target = textValue(values.target, "reponseJson");
+        const request = simulationHttpRequest("POST", values, state.variables);
+        const result = httpResults[request.key];
+        state.variables[target] = result?.body ?? "";
+        if (!request.url) {
+          state.messages.push("POST JSON : URL manquante");
+        } else if (!result) {
+          state.messages.push("POST JSON : lance la simulation");
+        } else if (result.status === "loading") {
+          state.messages.push(result.body ? "POST JSON : actualisation\u2026" : "POST JSON en cours\u2026");
+        } else if (result.status === "error") {
+          state.messages.push((result.body ? "Derni\u00e8re r\u00e9ponse conserv\u00e9e \u00b7 " : "POST impossible \u00b7 ") + (result.error || "Erreur r\u00e9seau"));
+        } else {
+          state.messages.push("POST " + (result.statusCode || 200) + " \u2192 " + target);
         }
         break;
       }
@@ -4487,42 +4595,52 @@ function App() {
   }
 
   function refreshSimulationHttpResults(eventDefinitionIds?: string[]) {
-    const urls = collectSimulationHttpUrls(stacks, preview.variables, eventDefinitionIds);
-    if (urls.length === 0) return;
+    const requests = collectSimulationHttpRequests(stacks, preview.variables, eventDefinitionIds);
+    if (requests.length === 0) return;
     const generation = simulationHttpGenerationRef.current;
     const pending = simulationHttpPendingRef.current;
-    const requestedUrls = urls.filter((url) => pending.get(url) !== generation);
-    if (requestedUrls.length === 0) return;
+    const requestedRequests = requests.filter((request) => pending.get(request.key) !== generation);
+    if (requestedRequests.length === 0) return;
 
     setSimulationHttpResults((current) => {
       const next = { ...current };
-      requestedUrls.forEach((url) => {
-        next[url] = { ...(current[url] ?? {}), status: "loading", error: undefined };
+      requestedRequests.forEach((request) => {
+        next[request.key] = { ...(current[request.key] ?? {}), status: "loading", error: undefined };
       });
       return next;
     });
 
-    requestedUrls.forEach((url) => {
-      pending.set(url, generation);
-      void requestSimulationJson(url)
+    requestedRequests.forEach((request) => {
+      pending.set(request.key, generation);
+      void requestSimulationJson(request)
         .then((result) => {
           if (simulationHttpGenerationRef.current !== generation) return;
           setSimulationHttpResults((current) => ({
             ...current,
-            [url]: result.ok && result.body !== undefined
+            [request.key]: result.ok && result.body !== undefined
               ? { status: "success", body: result.body, statusCode: result.status, resolvedUrl: result.url }
-              : { ...(current[url] ?? {}), status: "error", statusCode: result.status, resolvedUrl: result.url, error: result.error || "La requête GET a échoué." },
+              : {
+                ...(current[request.key] ?? {}),
+                status: "error",
+                statusCode: result.status,
+                resolvedUrl: result.url,
+                error: result.error || "La requ\u00eate " + request.method + " a \u00e9chou\u00e9.",
+              },
           }));
         })
         .catch((error) => {
           if (simulationHttpGenerationRef.current !== generation) return;
           setSimulationHttpResults((current) => ({
             ...current,
-            [url]: { ...(current[url] ?? {}), status: "error", error: error instanceof Error ? error.message : String(error) },
+            [request.key]: {
+              ...(current[request.key] ?? {}),
+              status: "error",
+              error: error instanceof Error ? error.message : String(error),
+            },
           }));
         })
         .finally(() => {
-          if (pending.get(url) === generation) pending.delete(url);
+          if (pending.get(request.key) === generation) pending.delete(request.key);
         });
     });
   }

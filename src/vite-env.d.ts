@@ -47,12 +47,18 @@ interface UploadProgress {
   message: string;
 }
 
-interface SimulationHttpGetResult {
+interface SimulationHttpResult {
   ok: boolean;
   url: string;
   status?: number;
   body?: string;
   error?: string;
+}
+
+interface SimulationHttpRequestPayload {
+  method: "GET" | "POST";
+  url: string;
+  body?: string;
 }
 
 type AppUpdateStage = "idle" | "disabled" | "checking" | "available" | "downloading" | "ready" | "installing" | "up-to-date" | "error";
@@ -116,7 +122,7 @@ interface Window {
     exportArduinoProject: (payload: { projectName: string; code: string }) => Promise<ExportArduinoProjectResult>;
     listSerialPorts: () => Promise<ListSerialPortsResult>;
     uploadToEsp32: (payload: UploadEsp32Payload) => Promise<UploadEsp32Result>;
-    fetchJsonForSimulation: (url: string) => Promise<SimulationHttpGetResult>;
+    fetchJsonForSimulation: (request: SimulationHttpRequestPayload) => Promise<SimulationHttpResult>;
     onUploadProgress: (callback: (progress: UploadProgress) => void) => () => void;
     getUpdateStatus: () => Promise<AppUpdateStatus>;
     checkForUpdates: () => Promise<AppUpdateStatus>;

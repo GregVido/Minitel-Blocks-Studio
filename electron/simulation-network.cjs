@@ -43,8 +43,8 @@ function errorMessage(error) {
 
 async function fetchSimulationJson(fetchImplementation, rawUrl, options = {}) {
   const requestedUrl = String(rawUrl || "").trim();
-  const method = options.method === "POST" || options.method === "PUT" || options.method === "DELETE" ? options.method : "GET";
-  const requestBody = method === "POST" || method === "PUT" ? String(options.body ?? "{}") : undefined;
+  const method = options.method === "POST" || options.method === "PUT" || options.method === "PATCH" || options.method === "DELETE" ? options.method : "GET";
+  const requestBody = method === "POST" || method === "PUT" || method === "PATCH" ? String(options.body ?? "{}") : undefined;
   let parsedUrl;
   try {
     parsedUrl = new URL(requestedUrl);

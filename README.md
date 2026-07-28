@@ -120,9 +120,10 @@ L'application démarre un petit serveur JSON local prêt à être utilisé dans 
 - le bloc **requête GET JSON** utilise `http://localhost:6663/test` ;
 - le bloc **requête POST JSON** utilise `http://localhost:6663/echo` ;
 - le bloc **requête PUT JSON** utilise aussi `http://localhost:6663/echo` ;
+- le bloc **requête PATCH JSON** utilise également `http://localhost:6663/echo` ;
 - le bloc **requête DELETE JSON** utilise également `http://localhost:6663/echo`.
 
-La réponse GET contient un message, un nombre et les paramètres query reçus. Les réponses POST et PUT renvoient également le corps JSON envoyé. La réponse DELETE confirme la ressource visée et permet de vérifier immédiatement les blocs de lecture JSON.
+La réponse GET contient un message, un nombre et les paramètres query reçus. Les réponses POST, PUT et PATCH renvoient également le corps JSON envoyé. La réponse DELETE confirme la ressource visée et permet de vérifier immédiatement les blocs de lecture JSON.
 
 Dans **Paramètres > Serveur de test**, le démarrage automatique peut être désactivé et le port peut être modifié. Les nouveaux blocs réseau utilisent alors automatiquement les adresses correspondant à ce port.
 

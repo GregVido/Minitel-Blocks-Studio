@@ -321,7 +321,7 @@ type SimulationHttpState = {
 
 type SimulationHttpRequest = {
   key: string;
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   url: string;
   body?: string;
 };
@@ -386,6 +386,7 @@ function initialTestServerStatus(): TestServerStatus {
       get: baseUrl + "/test",
       post: baseUrl + "/echo",
       put: baseUrl + "/echo",
+      patch: baseUrl + "/echo",
       delete: baseUrl + "/echo",
     },
   };
@@ -585,7 +586,7 @@ function simulationHttpRequest(
   variables: Record<string, number | string> = {},
 ): SimulationHttpRequest {
   const url = httpRequestUrl(values, variables);
-  const body = method === "POST" || method === "PUT" ? textValue(values.body, "{}") : undefined;
+  const body = method === "POST" || method === "PUT" || method === "PATCH" ? textValue(values.body, "{}") : undefined;
   return {
     key: JSON.stringify([method, url, body ?? ""]),
     method,
@@ -609,9 +610,11 @@ function collectSimulationHttpRequests(
           ? "POST"
           : block.definitionId === "http-put-json"
             ? "PUT"
-            : block.definitionId === "http-delete-json"
-              ? "DELETE"
-              : null;
+            : block.definitionId === "http-patch-json"
+              ? "PATCH"
+              : block.definitionId === "http-delete-json"
+                ? "DELETE"
+                : null;
       if (method) {
         const request = simulationHttpRequest(method, block.values, variables);
         if (request.url) requests.set(request.key, request);
@@ -628,9 +631,9 @@ function collectSimulationHttpRequests(
 
 async function requestSimulationJson(request: SimulationHttpRequest): Promise<SimulationHttpResult> {
   const { method, url } = request;
-  const requestBody = method === "POST" || method === "PUT" ? request.body ?? "{}" : undefined;
+  const requestBody = method === "POST" || method === "PUT" || method === "PATCH" ? request.body ?? "{}" : undefined;
   try {
-    if (method === "POST" || method === "PUT") {
+    if (method === "POST" || method === "PUT" || method === "PATCH") {
       if (new TextEncoder().encode(requestBody ?? "").byteLength > 2 * 1024 * 1024) {
         return { ok: false, url, error: "Le corps JSON dépasse la limite de 2 Mo." };
       }
@@ -1016,6 +1019,12 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"mise à jour\"}", placeholder: "{\"message\":\"mise à jour\"}" },
+    { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+  ] },
+  { id: "http-patch-json", title: "requête PATCH JSON", help: "Modifie partiellement une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: "#3f6fc4", inputs: [
+    { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
+    { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
+    { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"champ\":\"nouvelle valeur\"}", placeholder: "{\"champ\":\"nouvelle valeur\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "http-delete-json", title: "requête DELETE JSON", help: "Supprime une ressource et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: "#c05268", inputs: [
@@ -2050,7 +2059,7 @@ function appendHttpJsonRequestCode(
   indent: number,
   values: Values,
   variables: VariableDef[],
-  method: "GET" | "POST" | "PUT" | "DELETE",
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
 ) {
   const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
   const queryEntries = queryEntriesFromValue(values.query);
@@ -2058,9 +2067,11 @@ function appendHttpJsonRequestCode(
     ? "mbsHttpPostJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
     : method === "PUT"
       ? "mbsHttpPutJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
-      : method === "DELETE"
-        ? "mbsHttpDeleteJson(" + urlExpression + ")"
-        : "mbsHttpGetJson(" + urlExpression + ")";
+      : method === "PATCH"
+        ? "mbsHttpPatchJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
+        : method === "DELETE"
+          ? "mbsHttpDeleteJson(" + urlExpression + ")"
+          : "mbsHttpGetJson(" + urlExpression + ")";
 
   if (queryEntries.length === 0) {
     pushLine(lines, indent, target + " = " + requestExpression(cppString(textValue(values.url, ""))) + ";");
@@ -2217,6 +2228,9 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "http-put-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "PUT");
         break;
+      case "http-patch-json":
+        appendHttpJsonRequestCode(lines, indent, values, variables, "PATCH");
+        break;
       case "http-delete-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "DELETE");
         break;
@@ -2328,8 +2342,9 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const variableTypes = collectVariableTypes(stacks, variables);
   const usesHttpPost = projectUsesBlock(stacks, "http-post-json");
   const usesHttpPut = projectUsesBlock(stacks, "http-put-json");
+  const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
-  const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpDelete;
+  const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
@@ -2520,6 +2535,29 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       "  http.addHeader(\"Accept\", \"application/json\");",
       "  http.addHeader(\"Content-Type\", \"application/json\");",
       "  const int status = http.PUT(body);",
+      "  String response = status >= 200 && status < 300 ? http.getString() : String();",
+      "  http.end();",
+      "  if (response.length() == 0) return String();",
+      "  cJSON *document = cJSON_Parse(response.c_str());",
+      "  if (document == nullptr) return String();",
+      "  cJSON_Delete(document);",
+      "  return response;",
+      "}",
+    );
+  }
+
+  if (usesHttpPatch) {
+    lines.push(
+      "",
+      "String mbsHttpPatchJson(const String &url, const String &body) {",
+      "  if (WiFi.status() != WL_CONNECTED || url.length() == 0) return String();",
+      "  HTTPClient http;",
+      "  http.setTimeout(10000);",
+      "  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);",
+      "  if (!http.begin(url)) return String();",
+      "  http.addHeader(\"Accept\", \"application/json\");",
+      "  http.addHeader(\"Content-Type\", \"application/json\");",
+      "  const int status = http.PATCH(body);",
       "  String response = status >= 200 && status < 300 ? http.getString() : String();",
       "  http.end();",
       "  if (response.length() == 0) return String();",
@@ -2863,6 +2901,24 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
           state.messages.push((result.body ? "Derni\u00e8re r\u00e9ponse conserv\u00e9e \u00b7 " : "PUT impossible \u00b7 ") + (result.error || "Erreur r\u00e9seau"));
         } else {
           state.messages.push("PUT " + (result.statusCode || 200) + " \u2192 " + target);
+        }
+        break;
+      }
+      case "http-patch-json": {
+        const target = textValue(values.target, "reponseJson");
+        const request = simulationHttpRequest("PATCH", values, state.variables);
+        const result = httpResults[request.key];
+        state.variables[target] = result?.body ?? "";
+        if (!request.url) {
+          state.messages.push("PATCH JSON : URL manquante");
+        } else if (!result) {
+          state.messages.push("PATCH JSON : lance la simulation");
+        } else if (result.status === "loading") {
+          state.messages.push(result.body ? "PATCH JSON : actualisation\u2026" : "PATCH JSON en cours\u2026");
+        } else if (result.status === "error") {
+          state.messages.push((result.body ? "Derni\u00e8re r\u00e9ponse conserv\u00e9e \u00b7 " : "PATCH impossible \u00b7 ") + (result.error || "Erreur r\u00e9seau"));
+        } else {
+          state.messages.push("PATCH " + (result.statusCode || 200) + " \u2192 " + target);
         }
         break;
       }
@@ -4327,6 +4383,7 @@ function SettingsDialog({
               <div><span>GET</span><code>{testServer.endpoints.get}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.get)} title="Copier l'adresse GET"><Copy size={14} /></button></div>
               <div><span>POST</span><code>{testServer.endpoints.post}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.post)} title="Copier l'adresse POST"><Copy size={14} /></button></div>
               <div><span>PUT</span><code>{testServer.endpoints.put}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.put)} title="Copier l'adresse PUT"><Copy size={14} /></button></div>
+              <div><span>PATCH</span><code>{testServer.endpoints.patch}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.patch)} title="Copier l'adresse PATCH"><Copy size={14} /></button></div>
               <div><span>DELETE</span><code>{testServer.endpoints.delete}</code><button type="button" onClick={() => copyUrl(testServer.endpoints.delete)} title="Copier l'adresse DELETE"><Copy size={14} /></button></div>
             </div>
           </div>
@@ -4421,9 +4478,11 @@ function App() {
         ? testServer.endpoints.post
         : definition.id === "http-put-json"
           ? testServer.endpoints.put
-          : definition.id === "http-delete-json"
-            ? testServer.endpoints.delete
-            : "";
+          : definition.id === "http-patch-json"
+            ? testServer.endpoints.patch
+            : definition.id === "http-delete-json"
+              ? testServer.endpoints.delete
+              : "";
     if (!endpoint) return definition;
     return {
       ...definition,
@@ -4431,7 +4490,7 @@ function App() {
         ? { ...input, defaultValue: endpoint, placeholder: endpoint }
         : input),
     };
-  }), [testServer.endpoints.get, testServer.endpoints.post, testServer.endpoints.put, testServer.endpoints.delete]);
+  }), [testServer.endpoints.get, testServer.endpoints.post, testServer.endpoints.put, testServer.endpoints.patch, testServer.endpoints.delete]);
   const paletteDefinitionById = useMemo(() => [...paletteBlockDefinitions, ...variableValueBlocks]
     .reduce<Record<string, BlockDefinition>>((definitions, definition) => {
       definitions[definition.id] = definition;
@@ -5107,6 +5166,7 @@ function App() {
     if (definitionId === "http-get-json") block.values.url = testServer.endpoints.get;
     if (definitionId === "http-post-json") block.values.url = testServer.endpoints.post;
     if (definitionId === "http-put-json") block.values.url = testServer.endpoints.put;
+    if (definitionId === "http-patch-json") block.values.url = testServer.endpoints.patch;
     if (definitionId === "http-delete-json") block.values.url = testServer.endpoints.delete;
     blockById[definitionId]?.inputs?.forEach((input) => {
       if (input.type !== "variable") return;
@@ -5869,6 +5929,7 @@ function App() {
         get: "http://localhost:" + port + "/test",
         post: "http://localhost:" + port + "/echo",
         put: "http://localhost:" + port + "/echo",
+        patch: "http://localhost:" + port + "/echo",
         delete: "http://localhost:" + port + "/echo",
       },
     });

@@ -56,7 +56,7 @@ interface SimulationHttpResult {
 }
 
 interface SimulationHttpRequestPayload {
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   url: string;
   body?: string;
 }
@@ -71,6 +71,7 @@ interface TestServerStatus {
     get: string;
     post: string;
     put: string;
+    patch: string;
     delete: string;
   };
   error?: string;

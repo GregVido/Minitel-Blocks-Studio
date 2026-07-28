@@ -12,7 +12,7 @@ function normalizeTestServerPort(value, fallback = DEFAULT_TEST_SERVER_PORT) {
 function jsonHeaders() {
   return {
     "Access-Control-Allow-Headers": "Accept, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Origin": "*",
     "Cache-Control": "no-store",
     "Content-Type": "application/json; charset=utf-8",
@@ -64,6 +64,7 @@ async function handleTestRequest(request, response) {
     get: "/test",
     post: "/echo",
     put: "/echo",
+    patch: "/echo",
     delete: "/echo",
   };
 
@@ -86,17 +87,17 @@ async function handleTestRequest(request, response) {
     return;
   }
 
-  if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT" && request.method !== "DELETE") {
+  if (request.method !== "GET" && request.method !== "POST" && request.method !== "PUT" && request.method !== "PATCH" && request.method !== "DELETE") {
     sendJson(response, 405, {
       ok: false,
-      error: "Utilise une requête GET, POST, PUT ou DELETE.",
+      error: "Utilise une requête GET, POST, PUT, PATCH ou DELETE.",
       endpoints,
     });
     return;
   }
 
   let body = null;
-  if (request.method === "POST" || request.method === "PUT") {
+  if (request.method === "POST" || request.method === "PUT" || request.method === "PATCH") {
     try {
       const rawBody = await readRequestBody(request);
       body = rawBody ? JSON.parse(rawBody) : null;
@@ -117,9 +118,11 @@ async function handleTestRequest(request, response) {
       ? "Requête POST reçue par Minitel Blocks Studio."
       : request.method === "PUT"
         ? "Requête PUT reçue par Minitel Blocks Studio."
-        : request.method === "DELETE"
-          ? "Requête DELETE reçue par Minitel Blocks Studio."
-          : "Bonjour depuis le serveur de test.",
+        : request.method === "PATCH"
+          ? "Requête PATCH reçue par Minitel Blocks Studio."
+          : request.method === "DELETE"
+            ? "Requête DELETE reçue par Minitel Blocks Studio."
+            : "Bonjour depuis le serveur de test.",
     nombre: 42,
     method: request.method,
     path: url.pathname,

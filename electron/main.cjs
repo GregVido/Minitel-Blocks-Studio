@@ -35,6 +35,7 @@ let testServerState = {
     get: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/test",
     post: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
     put: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
+    patch: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
     delete: "http://localhost:" + DEFAULT_TEST_SERVER_PORT + "/echo",
   },
 };
@@ -98,6 +99,7 @@ function setTestServerState(patch) {
       get: baseUrl + "/test",
       post: baseUrl + "/echo",
       put: baseUrl + "/echo",
+      patch: baseUrl + "/echo",
       delete: baseUrl + "/echo",
     },
   };

@@ -1004,6 +1004,13 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
+  { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: "#1678a8", inputs: [
+    { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
+    { key: "port", label: "port", type: "number", defaultValue: num(1883), min: 1, max: 65535, compact: true },
+    { key: "clientId", label: "identifiant client", type: "text", defaultValue: "minitel-esp32", placeholder: "minitel-esp32" },
+    { key: "username", label: "utilisateur", type: "text", defaultValue: "", placeholder: "Optionnel" },
+    { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Optionnel", secret: true },
+  ] },
   { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/test", placeholder: "http://localhost:6663/test" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
@@ -2219,6 +2226,27 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "mqtt-connect": {
+        const host = textValue(values.host, "").trim();
+        const clientId = textValue(values.clientId, "minitel-esp32").trim() || "minitel-esp32";
+        const username = textValue(values.username, "");
+        if (!host) {
+          pushLine(lines, indent, "// Connexion MQTT ignorée : l'adresse du broker est vide.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "mbsMqttClient.setServer(" + cppString(host) + ", (uint16_t)(" + exprCode(values.port, num(1883)) + "));");
+        pushLine(lines, indent + 2, "mbsMqttClient.setKeepAlive(30);");
+        pushLine(lines, indent + 2, "if (WiFi.status() == WL_CONNECTED) {");
+        if (username) {
+          pushLine(lines, indent + 4, "mbsMqttClient.connect(" + cppString(clientId) + ", " + cppString(username) + ", " + cppString(values.password) + ");");
+        } else {
+          pushLine(lines, indent + 4, "mbsMqttClient.connect(" + cppString(clientId) + ");");
+        }
+        pushLine(lines, indent + 2, "}");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "http-get-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "GET");
         break;
@@ -2345,17 +2373,23 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
+  const usesMqtt = projectUsesBlock(stacks, "mqtt-connect");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
-  const usesWifi = usesHttp || projectUsesBlock(stacks, "wifi-connect");
+  const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
     ...(usesHttp ? ["#include <HTTPClient.h>"] : []),
+    ...(usesMqtt ? ['#include "PubSubClient.h"'] : []),
     ...(usesJson ? ['#include "cJSON.h"'] : []),
     "#include <MinitelESP32.h>",
     "",
     "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows,
     "MinitelESP32 minitel(Serial2, 16, 17, 1200);",
+    ...(usesMqtt ? [
+      "WiFiClient mbsMqttNetworkClient;",
+      "PubSubClient mbsMqttClient(mbsMqttNetworkClient);",
+    ] : []),
   ];
 
   lines.push(
@@ -2612,6 +2646,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   lines.push("", "void setup() {", "  minitel.begin();", "  minitel.resetDisplay();");
   setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens, colorEnabled: screenConfig.colorEnabled }));
   lines.push("}", "", "void loop() {");
+  if (usesMqtt) lines.push("  mbsMqttClient.loop();");
 
   if (keyStacks.length > 0) {
     lines.push("  MinitelESP32::Key key = minitel.readKey();");
@@ -2848,6 +2883,12 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "wifi-connect": {
         const ssid = textValue(values.ssid, "");
         state.messages.push("Simulation : réseau du PC" + (ssid ? " · SSID ESP32 : " + ssid : ""));
+        break;
+      }
+      case "mqtt-connect": {
+        const host = textValue(values.host, "").trim();
+        const port = clamp(Math.round(exprPreviewNumber(values.port, state.variables, 1883)), 1, 65535);
+        state.messages.push(host ? "MQTT simulé · " + host + ":" + port : "MQTT : adresse du broker manquante");
         break;
       }
       case "http-get-json": {

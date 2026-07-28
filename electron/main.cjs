@@ -673,14 +673,25 @@ function safeSerialPort(value) {
   return /^\/dev\/[A-Za-z0-9._/-]+$/.test(port) ? port : "";
 }
 
-function portableSketchCode(code) {
-  return String(code || "").replace(/#include\s*<MinitelESP32\.h>/, '#include "MinitelESP32.h"');
+function sketchUsesMqtt(code) {
+  return /#include\s*[<"]PubSubClient\.h[>"]/.test(String(code || ""));
 }
 
-async function copyLibrarySources(destination) {
+function portableSketchCode(code) {
+  return String(code || "")
+    .replace(/#include\s*<MinitelESP32\.h>/, '#include "MinitelESP32.h"')
+    .replace(/#include\s*<PubSubClient\.h>/, '#include "PubSubClient.h"');
+}
+
+async function copyLibrarySources(destination, code) {
   const sourceRoot = path.join(resourcesRoot(), "MinitelESP32", "src");
   await fs.copyFile(path.join(sourceRoot, "MinitelESP32.h"), path.join(destination, "MinitelESP32.h"));
   await fs.copyFile(path.join(sourceRoot, "MinitelESP32.cpp"), path.join(destination, "MinitelESP32.cpp"));
+  if (!sketchUsesMqtt(code)) return;
+  const mqttSourceRoot = path.join(resourcesRoot(), "PubSubClient", "src");
+  await fs.copyFile(path.join(mqttSourceRoot, "PubSubClient.h"), path.join(destination, "PubSubClient.h"));
+  await fs.copyFile(path.join(mqttSourceRoot, "PubSubClient.cpp"), path.join(destination, "PubSubClient.cpp"));
+  await fs.copyFile(path.join(resourcesRoot(), "PubSubClient", "LICENSE.txt"), path.join(destination, "PUBSUBCLIENT-LICENSE.txt"));
 }
 
 function safeProjectName(value) {
@@ -1000,14 +1011,17 @@ ipcMain.handle("export-arduino-project", async (_event, payload) => {
     if (confirmation.response !== 0) return { ok: false, canceled: true };
   }
 
+  const code = portableSketchCode(payload && payload.code);
+  const mqttIncluded = sketchUsesMqtt(code);
   await fs.mkdir(projectPath, { recursive: true });
-  await fs.writeFile(sketchPath, portableSketchCode(payload && payload.code), "utf8");
-  await copyLibrarySources(projectPath);
+  await fs.writeFile(sketchPath, code, "utf8");
+  await copyLibrarySources(projectPath, code);
   await fs.writeFile(path.join(projectPath, "LISEZ-MOI.txt"), [
     "PROJET ARDUINO MINITEL BLOCKS",
     "",
     "Ouvrez " + projectName + ".ino dans Arduino IDE.",
     "MinitelESP32.h et MinitelESP32.cpp sont deja inclus dans ce dossier : aucune bibliotheque Minitel n'est a installer.",
+    ...(mqttIncluded ? ["PubSubClient.h et PubSubClient.cpp sont inclus : aucune bibliotheque MQTT n'est a installer."] : []),
     "Choisissez votre carte ESP32 et son port, puis utilisez le bouton Televerser.",
     "",
   ].join("\r\n"), "utf8");
@@ -1044,7 +1058,7 @@ ipcMain.handle("upload-esp32", async (event, payload) => {
   await fs.mkdir(sketchRoot, { recursive: true });
   await fs.mkdir(buildRoot, { recursive: true });
   await fs.writeFile(path.join(sketchRoot, "MinitelBlocks.ino"), code, "utf8");
-  await copyLibrarySources(sketchRoot);
+  await copyLibrarySources(sketchRoot, code);
 
   sendUploadProgress(event, "compile", "Compilation pour " + board.label + "...");
   const compileArgs = [

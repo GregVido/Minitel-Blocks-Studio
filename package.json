@@ -59,6 +59,10 @@
         "to": "MinitelESP32"
       },
       {
+        "from": "resources/PubSubClient",
+        "to": "PubSubClient"
+      },
+      {
         "from": "logo.png",
         "to": "logo.png"
       }

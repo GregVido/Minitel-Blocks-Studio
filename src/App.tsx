@@ -1011,6 +1011,13 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "username", label: "utilisateur", type: "text", defaultValue: "", placeholder: "Optionnel" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Optionnel", secret: true },
   ] },
+  { id: "mqtt-subscribe", title: "s'abonner au topic MQTT", help: "Écoute les messages publiés sur un topic. Place ce bloc après la connexion au broker.", kind: "action", category: "network", color: "#1678a8", inputs: [
+    { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
+    { key: "qos", label: "qualité", type: "select", defaultValue: "0", options: [
+      { label: "standard (QoS 0)", value: "0" },
+      { label: "confirmée (QoS 1)", value: "1" },
+    ] },
+  ] },
   { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/test", placeholder: "http://localhost:6663/test" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
@@ -2247,6 +2254,18 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "mqtt-subscribe": {
+        const topic = textValue(values.topic, "").trim();
+        const qos = textValue(values.qos, "0") === "1" ? 1 : 0;
+        if (!topic) {
+          pushLine(lines, indent, "// Abonnement MQTT ignoré : le topic est vide.");
+          break;
+        }
+        pushLine(lines, indent, "if (mbsMqttClient.connected()) {");
+        pushLine(lines, indent + 2, "mbsMqttClient.subscribe(" + cppString(topic) + ", " + qos + ");");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "http-get-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "GET");
         break;
@@ -2373,7 +2392,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
-  const usesMqtt = projectUsesBlock(stacks, "mqtt-connect");
+  const usesMqtt = projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
@@ -2889,6 +2908,12 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         const host = textValue(values.host, "").trim();
         const port = clamp(Math.round(exprPreviewNumber(values.port, state.variables, 1883)), 1, 65535);
         state.messages.push(host ? "MQTT simulé · " + host + ":" + port : "MQTT : adresse du broker manquante");
+        break;
+      }
+      case "mqtt-subscribe": {
+        const topic = textValue(values.topic, "").trim();
+        const qos = textValue(values.qos, "0") === "1" ? 1 : 0;
+        state.messages.push(topic ? "Abonné à " + topic + " · QoS " + qos + " (simulation)" : "MQTT : topic manquant");
         break;
       }
       case "http-get-json": {

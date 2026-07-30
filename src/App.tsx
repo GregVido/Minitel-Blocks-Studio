@@ -63,7 +63,7 @@ import {
 import ProjectHub, { type NewProjectSettings } from "./project-hub";
 
 type BlockKind = "event" | "action" | "control" | "value";
-type InputType = "text" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "query";
+type InputType = "text" | "text-value" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "query";
 type ExprType = "number" | "boolean" | "text";
 type VariableValueType = "number" | "text";
 type RightTab = "preview" | "code" | "upload";
@@ -251,7 +251,7 @@ type ExpressionDropOwner =
 
 type ExpressionDropLocation = ExpressionDropOwner & {
   path: ExpressionPathPart[];
-  accepts: "number" | "boolean" | "query";
+  accepts: "number" | "boolean" | "text" | "query";
   queryTarget?: {
     index: number;
     field: "key" | "value";
@@ -1027,6 +1027,11 @@ const blockDefinitions: BlockDefinition[] = [
       { label: "confirmée (QoS 1)", value: "1" },
     ] },
   ] },
+  { id: "mqtt-publish", title: "publier un message MQTT", help: "Envoie un texte sur un topic MQTT. Le message peut être saisi ou fourni par une variable Texte.", kind: "action", category: "network", color: "#1678a8", inputs: [
+    { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
+    { key: "payload", label: "message", type: "text-value", defaultValue: textExpr("Bonjour depuis le Minitel"), placeholder: "Bonjour depuis le Minitel" },
+    { key: "retained", label: "conserver sur le broker", type: "boolean", defaultValue: false },
+  ] },
   { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/test", placeholder: "http://localhost:6663/test" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
@@ -1141,6 +1146,14 @@ function normalizeImportedTextExpr(value: unknown, fallback: Expr = textExpr("")
   return cloneValue(fallback);
 }
 
+function normalizeImportedTextValueExpr(value: unknown, fallback: Expr = textExpr("")): Expr {
+  const record = importedRecord(value);
+  if (record?.kind === "variable" && record.valueType === "text" && typeof record.name === "string" && record.name.trim()) {
+    return { kind: "variable", valueType: "text", name: record.name.trim().slice(0, 64) };
+  }
+  return normalizeImportedTextExpr(value, fallback);
+}
+
 function normalizeImportedCondition(value: unknown, fallback: Expr): Expr {
   const record = importedRecord(value);
   const emptyCondition = compareExpr(num(0), ">", num(0));
@@ -1187,6 +1200,10 @@ function normalizeImportedValues(definition: BlockDefinition, value: unknown): V
     }
     if (input.type === "text") {
       if (["string", "number", "boolean"].includes(typeof importedValue)) values[input.key] = String(importedValue).slice(0, 1024);
+      return;
+    }
+    if (input.type === "text-value") {
+      values[input.key] = normalizeImportedTextValueExpr(importedValue, input.defaultValue as Expr);
       return;
     }
     if (input.type === "query") {
@@ -1891,6 +1908,13 @@ function exprPreviewBoolean(value: InputValue | undefined, variables: Record<str
   return exprPreviewNumber(expr, variables) !== 0;
 }
 
+function exprPreviewText(value: InputValue | undefined, variables: Record<string, number | string>, fallback = ""): string {
+  const expr = textExpression(value);
+  if (expr.kind === "variable") return String(variables[expr.name] ?? fallback);
+  if (expr.kind === "literal") return String(expr.value ?? "");
+  return fallback;
+}
+
 function expressionLabel(value: InputValue | undefined): string {
   if (!isExpr(value)) {
     return String(value ?? "");
@@ -1913,48 +1937,28 @@ function expressionLabel(value: InputValue | undefined): string {
   return "non " + expressionLabel(value.operand);
 }
 
-function collectExprVariables(value: InputValue | undefined, target: Set<string>) {
-  if (!isExpr(value)) {
-    return;
-  }
-  if (value.kind === "variable") {
-    target.add(value.name);
-    return;
-  }
-  if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
-    collectExprVariables(value.left, target);
-    collectExprVariables(value.right, target);
-    return;
-  }
-  if (value.kind === "random") {
-    collectExprVariables(value.from, target);
-    collectExprVariables(value.to, target);
-    return;
-  }
-  if (value.kind === "not") {
-    collectExprVariables(value.operand, target);
-  }
-}
-
-function replaceNumberVariableReference(value: InputValue, variableName: string, replacement: Expr): InputValue {
+function replaceVariableReference(value: InputValue, variableName: string, numberReplacement: Expr, textReplacement: Expr): InputValue {
   if (!isExpr(value)) return value;
-  if (value.kind === "variable") return value.name === variableName ? cloneValue(replacement) : value;
+  if (value.kind === "variable") {
+    if (value.name !== variableName) return value;
+    return cloneValue(value.valueType === "text" ? textReplacement : numberReplacement);
+  }
   if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
     return {
       ...value,
-      left: replaceNumberVariableReference(value.left, variableName, replacement) as Expr,
-      right: replaceNumberVariableReference(value.right, variableName, replacement) as Expr,
+      left: replaceVariableReference(value.left, variableName, numberReplacement, textReplacement) as Expr,
+      right: replaceVariableReference(value.right, variableName, numberReplacement, textReplacement) as Expr,
     };
   }
   if (value.kind === "random") {
     return {
       ...value,
-      from: replaceNumberVariableReference(value.from, variableName, replacement) as Expr,
-      to: replaceNumberVariableReference(value.to, variableName, replacement) as Expr,
+      from: replaceVariableReference(value.from, variableName, numberReplacement, textReplacement) as Expr,
+      to: replaceVariableReference(value.to, variableName, numberReplacement, textReplacement) as Expr,
     };
   }
   if (value.kind === "not") {
-    return { ...value, operand: replaceNumberVariableReference(value.operand, variableName, replacement) as Expr };
+    return { ...value, operand: replaceVariableReference(value.operand, variableName, numberReplacement, textReplacement) as Expr };
   }
   return value;
 }
@@ -1965,6 +1969,7 @@ function repairVariableValues(
   variables: VariableDef[],
   previousName: string,
   numberReplacement: Expr,
+  textReplacement: Expr,
   nextName?: string,
 ) {
   const nextValues = Object.fromEntries(Object.entries(values).map(([key, value]) => {
@@ -1982,7 +1987,7 @@ function repairVariableValues(
         && (expectedType === "any" || variableValueType(renamedVariable) === expectedType);
       return [key, renamedVariableIsCompatible ? nextName : compatibleVariables[0]?.name ?? ""];
     }
-    return [key, replaceNumberVariableReference(value, previousName, numberReplacement)];
+    return [key, replaceVariableReference(value, previousName, numberReplacement, textReplacement)];
   }));
   return nextValues as Values;
 }
@@ -1992,13 +1997,14 @@ function repairVariableReferencesInBlocks(
   variables: VariableDef[],
   previousName: string,
   numberReplacement: Expr,
+  textReplacement: Expr,
   nextName?: string,
 ): ProgramBlock[] {
   return blocks.map((block) => ({
     ...block,
-    values: repairVariableValues(blockById[block.definitionId], block.values, variables, previousName, numberReplacement, nextName),
-    children: block.children ? repairVariableReferencesInBlocks(block.children, variables, previousName, numberReplacement, nextName) : undefined,
-    elseChildren: block.elseChildren ? repairVariableReferencesInBlocks(block.elseChildren, variables, previousName, numberReplacement, nextName) : undefined,
+    values: repairVariableValues(blockById[block.definitionId], block.values, variables, previousName, numberReplacement, textReplacement, nextName),
+    children: block.children ? repairVariableReferencesInBlocks(block.children, variables, previousName, numberReplacement, textReplacement, nextName) : undefined,
+    elseChildren: block.elseChildren ? repairVariableReferencesInBlocks(block.elseChildren, variables, previousName, numberReplacement, textReplacement, nextName) : undefined,
   }));
 }
 
@@ -2008,13 +2014,17 @@ function repairVariableReferencesInStacks(stacks: ScriptStack[], variables: Vari
     ? renamedVariable
     : variables.find((variable) => variableValueType(variable) === "number");
   const numberReplacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
+  const replacementTextVariable = renamedVariable && variableValueType(renamedVariable) === "text"
+    ? renamedVariable
+    : variables.find((variable) => variableValueType(variable) === "text");
+  const textReplacement = replacementTextVariable ? variableReferenceExpr(replacementTextVariable) : textExpr("");
   return stacks.map((stack) => ({
     ...stack,
     event: {
       ...stack.event,
-      values: repairVariableValues(blockById[stack.event.definitionId], stack.event.values, variables, previousName, numberReplacement, nextName),
+      values: repairVariableValues(blockById[stack.event.definitionId], stack.event.values, variables, previousName, numberReplacement, textReplacement, nextName),
     },
-    blocks: repairVariableReferencesInBlocks(stack.blocks, variables, previousName, numberReplacement, nextName),
+    blocks: repairVariableReferencesInBlocks(stack.blocks, variables, previousName, numberReplacement, textReplacement, nextName),
   }));
 }
 
@@ -2042,10 +2052,24 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
     const cleanName = name.trim();
     if (cleanName && !types.has(cleanName)) types.set(cleanName, valueType);
   };
-  const collectNumberExpressions = (values: Iterable<InputValue>) => {
-    const names = new Set<string>();
-    Array.from(values).forEach((value) => collectExprVariables(value, names));
-    names.forEach((name) => addVariable(name, "number"));
+  const collectExpressionVariables = (values: Iterable<InputValue>) => {
+    const visit = (value: InputValue | undefined) => {
+      if (!isExpr(value)) return;
+      if (value.kind === "variable") {
+        addVariable(value.name, value.valueType === "text" ? "text" : "number");
+        return;
+      }
+      if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
+        visit(value.left);
+        visit(value.right);
+      } else if (value.kind === "random") {
+        visit(value.from);
+        visit(value.to);
+      } else if (value.kind === "not") {
+        visit(value.operand);
+      }
+    };
+    Array.from(values).forEach(visit);
   };
 
   variables.forEach((variable) => addVariable(variable.name, variableValueType(variable)));
@@ -2056,7 +2080,7 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
       if (input?.type === "variable" && typeof value === "string") {
         addVariable(value, input.variableType === "text" ? "text" : "number");
       }
-      collectNumberExpressions([value]);
+      collectExpressionVariables([value]);
     });
     walkBlocks(stack.blocks, (block) => {
       const definition = blockById[block.definitionId];
@@ -2065,7 +2089,7 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
         if (input?.type === "variable" && typeof value === "string") {
           addVariable(value, input.variableType === "text" ? "text" : "number");
         }
-        collectNumberExpressions([value]);
+        collectExpressionVariables([value]);
       });
     });
   });
@@ -2282,6 +2306,20 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "mqtt-publish": {
+        const topic = textValue(values.topic, "").trim();
+        if (!topic) {
+          pushLine(lines, indent, "// Publication MQTT ignorée : le topic est vide.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "String mbsMqttPayload = String(" + exprCode(values.payload, textExpr("")) + ");");
+        pushLine(lines, indent + 2, "if (mbsMqttClient.connected()) {");
+        pushLine(lines, indent + 4, "mbsMqttClient.publish(" + cppString(topic) + ", mbsMqttPayload.c_str(), " + (boolValue(values.retained, false) ? "true" : "false") + ");");
+        pushLine(lines, indent + 2, "}");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "http-get-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "GET");
         break;
@@ -2409,7 +2447,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
-  const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe");
+  const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
@@ -2956,6 +2994,15 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         state.messages.push(topic ? "Abonné à " + topic + " · QoS " + qos + " (simulation)" : "MQTT : topic manquant");
         break;
       }
+      case "mqtt-publish": {
+        const topic = textValue(values.topic, "").trim();
+        const payload = exprPreviewText(values.payload, state.variables);
+        const retained = boolValue(values.retained, false);
+        state.messages.push(topic
+          ? "MQTT envoyé · " + topic + " · " + (payload || "message vide") + (retained ? " · conservé" : "")
+          : "MQTT : topic de publication manquant");
+        break;
+      }
       case "http-get-json": {
         const target = textValue(values.target, "reponseJson");
         const request = simulationHttpRequest("GET", values, state.variables);
@@ -3299,6 +3346,12 @@ function numberExpression(value: InputValue | undefined): Expr {
   return num(Number.isFinite(numericValue) ? numericValue : 0);
 }
 
+function textExpression(value: InputValue | undefined): Expr {
+  if (isExpr(value) && value.valueType === "text" && (value.kind === "literal" || value.kind === "variable")) return value;
+  if (["string", "number", "boolean"].includes(typeof value)) return textExpr(String(value));
+  return textExpr("");
+}
+
 type BooleanExpression = LiteralExpr | CompareExpr | LogicalExpr | NotExpr;
 
 function booleanExpression(value: InputValue | undefined, variables: VariableDef[]): BooleanExpression {
@@ -3544,6 +3597,75 @@ function NumberExpressionEditor({
   return (
     <span className="expression-pill number-expression">
       <NumberExpressionNode value={expr} variables={variables} onChange={onChange} dropLocation={dropLocation} />
+    </span>
+  );
+}
+
+type TextExpressionMode = "literal" | "variable";
+
+function TextExpressionEditor({
+  value,
+  variables,
+  onChange,
+  expressionOwner,
+}: {
+  value: InputValue | undefined;
+  variables: VariableDef[];
+  onChange: (value: Expr) => void;
+  expressionOwner?: ExpressionDropOwner;
+}) {
+  const expr = textExpression(value);
+  const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
+  const preferredTextVariable = textVariables.find((variable) => variable.name === "texte") ?? textVariables[0];
+  const mode: TextExpressionMode = expr.kind === "variable" ? "variable" : "literal";
+  const dropLocation: ExpressionDropLocation | undefined = expressionOwner
+    ? { ...expressionOwner, path: [], accepts: "text" }
+    : undefined;
+  const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
+  const changeMode = (nextMode: TextExpressionMode) => {
+    if (nextMode === "variable") {
+      onChange(preferredTextVariable ? variableReferenceExpr(preferredTextVariable) : textExpr(""));
+    } else {
+      onChange(textExpr(expr.kind === "literal" ? String(expr.value ?? "") : ""));
+    }
+  };
+
+  return (
+    <span className="expression-pill text-expression">
+      <span
+        className={"text-expression-node expression-" + mode}
+        data-expression-drop={dropLocation ? JSON.stringify(dropLocation) : undefined}
+        data-expression-drop-key={dropKey}
+        data-expression-accepts={dropLocation?.accepts}
+      >
+        {mode === "variable" && expr.kind === "variable" ? (
+          <select
+            className="expression-variable-select"
+            value={textVariables.some((variable) => variable.name === expr.name) ? expr.name : preferredTextVariable?.name ?? ""}
+            aria-label="Variable Texte"
+            onChange={(event) => onChange({ ...expr, name: event.target.value })}
+            disabled={textVariables.length === 0}
+          >
+            {textVariables.length === 0 ? <option value="">Aucune variable Texte</option> : null}
+            {textVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+          </select>
+        ) : (
+          <input
+            type="text"
+            maxLength={1024}
+            aria-label="Texte du message"
+            value={expr.kind === "literal" ? String(expr.value ?? "") : ""}
+            onChange={(event) => onChange(textExpr(event.target.value))}
+          />
+        )}
+        <span className={"expression-kind-switch is-" + mode} title={mode === "literal" ? "Utiliser une variable Texte" : "Saisir un texte"}>
+          <ChevronDown size={11} aria-hidden="true" />
+          <select value={mode} aria-label="Type de texte" onChange={(event) => changeMode(event.target.value as TextExpressionMode)}>
+            <option value="literal">Texte saisi</option>
+            <option value="variable" disabled={textVariables.length === 0}>Variable Texte</option>
+          </select>
+        </span>
+      </span>
     </span>
   );
 }
@@ -3832,6 +3954,15 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
       <label className="block-control block-control-wide" onMouseDown={stopDrag}>
         <span>{input.label}</span>
         <input type={input.secret ? "password" : "text"} value={String(actualValue)} placeholder={input.placeholder} autoComplete="off" onChange={(event) => onChange(event.target.value)} />
+      </label>
+    );
+  }
+
+  if (input.type === "text-value") {
+    return (
+      <label className="block-control expression-control block-control-wide text-expression-control" onMouseDown={stopDrag}>
+        <span>{input.label}</span>
+        <TextExpressionEditor value={actualValue} variables={variables} expressionOwner={expressionOwner} onChange={onChange} />
       </label>
     );
   }
@@ -5395,11 +5526,13 @@ function App() {
     if (output.valueType !== location.accepts) return;
     const replacement = cloneValue(output);
     const replaceValue = (value: InputValue | undefined): Expr => {
-      const root = isExpr(value)
+      const root = isExpr(value) && value.valueType === location.accepts
         ? value
         : location.accepts === "boolean"
           ? boolExpr(Boolean(value))
-          : numberExpression(value);
+          : location.accepts === "text"
+            ? textExpression(value)
+            : numberExpression(value);
       return replaceExprAtPath(root, location.path, replacement);
     };
 
@@ -5437,7 +5570,7 @@ function App() {
     }
 
     pulseExpressionTarget(location);
-    flashNotice(output.valueType === "boolean" ? "Condition insérée" : "Opération imbriquée");
+    flashNotice(output.valueType === "boolean" ? "Condition insérée" : output.valueType === "text" ? "Texte inséré" : "Opération imbriquée");
   }
 
   function handleDropBranch(payload: DragPayload, location: DropLocation) {
@@ -5693,9 +5826,13 @@ function App() {
         ? renamedVariable
         : nextVariables.find((variable) => variableValueType(variable) === "number");
       const replacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
+      const replacementTextVariable = renamedVariable && variableValueType(renamedVariable) === "text"
+        ? renamedVariable
+        : nextVariables.find((variable) => variableValueType(variable) === "text");
+      const textReplacement = replacementTextVariable ? variableReferenceExpr(replacementTextVariable) : textExpr("");
       setVariables(nextVariables.map((variable) => ({
         ...variable,
-        defaultValue: replaceNumberVariableReference(variable.defaultValue, currentVariable.name, replacement) as Expr,
+        defaultValue: replaceVariableReference(variable.defaultValue, currentVariable.name, replacement, textReplacement) as Expr,
       })));
       setStacks((current) => repairVariableReferencesInStacks(
         current,
@@ -5720,9 +5857,11 @@ function App() {
     const nextVariables = variables.filter((variable) => variable.id !== id);
     const replacementVariable = nextVariables.find((variable) => variableValueType(variable) === "number");
     const replacement = replacementVariable ? variableExpr(replacementVariable.name) : num(0);
+    const replacementTextVariable = nextVariables.find((variable) => variableValueType(variable) === "text");
+    const textReplacement = replacementTextVariable ? variableReferenceExpr(replacementTextVariable) : textExpr("");
     setVariables(nextVariables.map((variable) => ({
       ...variable,
-      defaultValue: replaceNumberVariableReference(variable.defaultValue, removedVariable.name, replacement) as Expr,
+      defaultValue: replaceVariableReference(variable.defaultValue, removedVariable.name, replacement, textReplacement) as Expr,
     })));
     setStacks((current) => repairVariableReferencesInStacks(current, nextVariables, removedVariable.name));
   }

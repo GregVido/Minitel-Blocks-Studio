@@ -953,3 +953,28 @@ body,
 [data-theme="dark"] .query-parameter-field input:focus {
   background: #303b4c;
 }
+
+
+[data-theme="dark"] .mqtt-simulator {
+  border-color: #31545d;
+  background: #17262c;
+}
+
+[data-theme="dark"] .mqtt-simulator-title {
+  color: #72d7df;
+}
+
+[data-theme="dark"] .mqtt-simulator label > span {
+  color: #aab7c5;
+}
+
+[data-theme="dark"] .mqtt-simulator input {
+  border-color: #3a4b58;
+  background: #202a34;
+  color: #eef4fa;
+}
+
+[data-theme="dark"] .mqtt-simulator input:focus {
+  border-color: #40bdc7;
+  box-shadow: 0 0 0 3px rgba(64, 189, 199, 0.14);
+}

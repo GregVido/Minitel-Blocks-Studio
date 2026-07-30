@@ -2671,3 +2671,75 @@ textarea:focus-visible {
   width: max-content;
   min-width: 0;
 }
+
+
+/* MQTT event simulator */
+.mqtt-simulator {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr) auto;
+  align-items: end;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #b8dfe5;
+  border-radius: 7px;
+  background: #f1fafb;
+  animation: statEnter 220ms ease both;
+}
+
+.mqtt-simulator-title {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #17646d;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.mqtt-simulator label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.mqtt-simulator label > span {
+  color: #516075;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mqtt-simulator input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #c9dbe6;
+  border-radius: 6px;
+  outline: none;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.mqtt-simulator input:focus {
+  border-color: #16a6b6;
+  box-shadow: 0 0 0 3px rgba(22, 166, 182, 0.14);
+}
+
+.mqtt-simulator .mqtt-test {
+  min-width: 96px;
+}
+
+@media (max-width: 1320px) {
+  .mqtt-simulator {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .mqtt-simulator .mqtt-test {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}

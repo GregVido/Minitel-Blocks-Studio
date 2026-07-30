@@ -326,6 +326,11 @@ type SimulationHttpRequest = {
   body?: string;
 };
 
+type SimulatedMqttMessage = {
+  topic: string;
+  payload: string;
+};
+
 type UploadResult = {
   ok: boolean;
   output: string;
@@ -915,6 +920,10 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "event-loop", title: "répéter en continu", help: "Pile exécutée à chaque tour de boucle Arduino.", kind: "event", category: "start", color: "#ffb703" },
   { id: "event-key-any", title: "quand une touche arrive", help: "Pile exécutée quand le Minitel envoie une touche.", kind: "event", category: "start", color: "#ffb703" },
   { id: "event-key-char", title: "quand la touche", help: "Pile exécutée pour une touche précise.", kind: "event", category: "start", color: "#ffb703", inputs: [{ key: "key", label: "touche", type: "select", defaultValue: "A", options: keyOptions }] },
+  { id: "event-mqtt-message", title: "quand un message MQTT est reçu", help: "Pile exécutée à la réception d'un message MQTT. Laisse le topic vide pour accepter tous les messages.", kind: "event", category: "start", color: "#ffb703", inputs: [
+    { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
+    { key: "target", label: "message dans", type: "variable", defaultValue: "texte", variableType: "text" },
+  ] },
 
   { id: "reset-display", title: "préparer l'écran", help: "Texte normal, écran effacé, curseur en haut à gauche.", kind: "action", category: "screen", color: "#2785ff" },
   { id: "clear-screen", title: "effacer l'écran", help: "Vide les 40 colonnes et 24 lignes.", kind: "action", category: "screen", color: "#2785ff" },
@@ -2041,7 +2050,14 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
 
   variables.forEach((variable) => addVariable(variable.name, variableValueType(variable)));
   stacks.forEach((stack) => {
-    collectNumberExpressions(Object.values(stack.event.values));
+    const eventDefinition = blockById[stack.event.definitionId];
+    Object.entries(stack.event.values).forEach(([key, value]) => {
+      const input = eventDefinition?.inputs?.find((item) => item.key === key);
+      if (input?.type === "variable" && typeof value === "string") {
+        addVariable(value, input.variableType === "text" ? "text" : "number");
+      }
+      collectNumberExpressions([value]);
+    });
     walkBlocks(stack.blocks, (block) => {
       const definition = blockById[block.definitionId];
       Object.entries(block.values).forEach(([key, value]) => {
@@ -2386,13 +2402,14 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
+  const mqttMessageStacks = stacks.filter((stack) => stack.event.definitionId === "event-mqtt-message");
   const variableTypes = collectVariableTypes(stacks, variables);
   const usesHttpPost = projectUsesBlock(stacks, "http-post-json");
   const usesHttpPut = projectUsesBlock(stacks, "http-put-json");
   const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
-  const usesMqtt = projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe");
+  const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect");
   const lines: string[] = [
@@ -2662,7 +2679,30 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
     lines.push("}");
   });
 
+  if (mqttMessageStacks.length > 0) {
+    lines.push(
+      "",
+      "void mbsHandleMqttMessage(char *receivedTopic, byte *payload, unsigned int length) {",
+      "  String mbsMqttTopic = receivedTopic == nullptr ? String() : String(receivedTopic);",
+      "  String mbsMqttMessage;",
+      "  mbsMqttMessage.reserve(length);",
+      "  for (unsigned int index = 0; index < length; ++index) {",
+      "    mbsMqttMessage += (char)payload[index];",
+      "  }",
+    );
+    mqttMessageStacks.forEach((stack) => {
+      const topic = textValue(stack.event.values.topic, "").trim();
+      const target = textValue(stack.event.values.target, "").trim();
+      pushLine(lines, 2, topic ? "if (mbsMqttTopic == " + cppString(topic) + ") {" : "{");
+      if (target) pushLine(lines, 4, sanitizeIdentifier(target) + " = mbsMqttMessage;");
+      appendBlockCode(lines, stack.blocks, 4, variables, { screens, colorEnabled: screenConfig.colorEnabled });
+      pushLine(lines, 2, "}");
+    });
+    lines.push("}");
+  }
+
   lines.push("", "void setup() {", "  minitel.begin();", "  minitel.resetDisplay();");
+  if (mqttMessageStacks.length > 0) lines.push("  mbsMqttClient.setCallback(mbsHandleMqttMessage);");
   setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens, colorEnabled: screenConfig.colorEnabled }));
   lines.push("}", "", "void loop() {");
   if (usesMqtt) lines.push("  mbsMqttClient.loop();");
@@ -3094,11 +3134,12 @@ function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
   const state = createPreviewState(variables, screenConfig);
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
+  const mqttMessageStacks = stacks.filter((stack) => stack.event.definitionId === "event-mqtt-message");
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
   setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
@@ -3111,6 +3152,20 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
     keyStacks
       .filter((stack) => stack.event.definitionId === "event-key-any" || previewKeyMatches(stack.event.values.key, key))
       .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens, httpResults));
+  });
+
+  simulatedMqttMessages.slice(-12).forEach((message) => {
+    const matchingStacks = mqttMessageStacks.filter((stack) => {
+      const topic = textValue(stack.event.values.topic, "").trim();
+      return !topic || topic === message.topic;
+    });
+    state.messages.push("MQTT reçu · " + message.topic);
+    matchingStacks.forEach((stack) => {
+      const target = textValue(stack.event.values.target, "").trim();
+      if (target) state.variables[target] = message.payload;
+      applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults);
+    });
+    if (matchingStacks.length === 0) state.messages.push("Aucun déclencheur pour ce topic");
   });
 
   state.messages.push("Tour " + loopCount);
@@ -4504,6 +4559,9 @@ function App() {
   const [simTick, setSimTick] = useState(0);
   const [simSpeed, setSimSpeed] = useState(550);
   const [simulatedKeys, setSimulatedKeys] = useState<string[]>([]);
+  const [mqttPreviewTopic, setMqttPreviewTopic] = useState("minitel/messages");
+  const [mqttPreviewPayload, setMqttPreviewPayload] = useState("Bonjour MQTT");
+  const [simulatedMqttMessages, setSimulatedMqttMessages] = useState<SimulatedMqttMessage[]>([]);
   const [simulationHttpResults, setSimulationHttpResults] = useState<Record<string, SimulationHttpState>>({});
   const simulationHttpGenerationRef = useRef(0);
   const simulationHttpPendingRef = useRef<Map<string, number>>(new Map());
@@ -4566,8 +4624,9 @@ function App() {
   const activeBlocks = activeCategory === "variables" ? [...variableValueBlocks, ...categoryBlocks] : categoryBlocks;
   const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
   const sceneElements = activeScreen?.elements ?? [];
+  const hasMqttMessageEvent = stacks.some((stack) => stack.event.definitionId === "event-mqtt-message");
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens), [screenConfig, screens, stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulationHttpResults]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
@@ -4930,6 +4989,7 @@ function App() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
+    setSimulatedMqttMessages([]);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)).slice(0, 40), "history-flash"), 0);
   }
 
@@ -5028,10 +5088,24 @@ function App() {
     flashNotice("Touche " + minitelKeyLabel(key) + " simulée");
   }
 
+  function triggerSimulatedMqttMessage() {
+    const topic = mqttPreviewTopic.trim();
+    if (!topic) {
+      flashNotice("Indique un topic MQTT");
+      return;
+    }
+    setRightTab("preview");
+    setSimulatedMqttMessages((current) => [...current.slice(-11), { topic, payload: mqttPreviewPayload }]);
+    setSimTick((current) => current + 1);
+    void refreshSimulationHttpResults(["event-setup", "event-loop", "event-mqtt-message"]);
+    flashNotice("Message MQTT simulé");
+  }
+
   function resetSimulation() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
+    setSimulatedMqttMessages([]);
     clearSimulationHttpResults();
   }
 
@@ -5548,6 +5622,7 @@ function App() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
+    setSimulatedMqttMessages([]);
     window.setTimeout(() => animateBlock(collectBlockIds(nextStacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice("Nouveau programme");
   }
@@ -5567,6 +5642,7 @@ function App() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
+    setSimulatedMqttMessages([]);
     setExamplesOpen(false);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice(example.name + " chargé");
@@ -5713,6 +5789,7 @@ function App() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
+    setSimulatedMqttMessages([]);
     setExamplesOpen(false);
     lastSavedSignatureRef.current = projectSnapshotSignature(next, parsed.board, { name: summary.name, createdAt: summary.createdAt });
     setSaveState("saved");
@@ -6193,6 +6270,14 @@ function App() {
                 <label className="speed-control"><span>{simSpeed} ms</span><input type="range" min="150" max="1200" step="50" value={simSpeed} onChange={(event) => setSimSpeed(Number(event.target.value))} /></label>
                 <div className="sim-counter">Tour {Math.max(1, Math.min(12, simTick + 1))}</div>
               </div>
+              {hasMqttMessageEvent ? (
+                <div className="mqtt-simulator" aria-label="Simuler un message MQTT">
+                  <div className="mqtt-simulator-title"><Radio size={15} /><span>Message MQTT reçu</span></div>
+                  <label><span>Topic</span><input type="text" maxLength={256} value={mqttPreviewTopic} onChange={(event) => setMqttPreviewTopic(event.target.value)} placeholder="minitel/messages" /></label>
+                  <label><span>Message</span><input type="text" maxLength={1024} value={mqttPreviewPayload} onChange={(event) => setMqttPreviewPayload(event.target.value)} placeholder="Bonjour MQTT" /></label>
+                  <button type="button" className="sim-button mqtt-test" onClick={triggerSimulatedMqttMessage} disabled={!mqttPreviewTopic.trim()} title="Simuler la réception du message"><Play size={15} /><span>Recevoir</span></button>
+                </div>
+              ) : null}
               <div className="minitel-frame">
                 <div className="minitel-screen" style={{ gridTemplateColumns: "repeat(" + preview.columns + ", 1fr)", gridTemplateRows: "repeat(" + preview.rows + ", 1fr)", aspectRatio: (preview.columns * 4) + " / " + (preview.rows * 5), "--preview-columns": preview.columns } as CSSProperties}>
                   {preview.cells.map((cell, index) => {

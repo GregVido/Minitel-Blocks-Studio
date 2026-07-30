@@ -51,6 +51,8 @@ Chaque bloc propose des commandes pour :
 - le supprimer ;
 - modifier directement ses textes, nombres, couleurs, variables ou conditions.
 
+La catégorie **Opérations** permet aussi de travailler avec du texte : concaténer plusieurs morceaux, remplacer un passage, compter les caractères, trouver une position, ou vérifier si un texte contient, commence par ou se termine par une valeur. Ces blocs s'imbriquent entre eux et acceptent les variables Texte. Les conditions peuvent être déposées dans les blocs **si**, tandis que la longueur et la position s'utilisent partout où un nombre est attendu.
+
 Dans la catégorie **Avancé**, le bloc **régler la vitesse** permet de choisir 300, 1200, 4800 ou 9600 bauds. Place-le dans la pile de démarrage à l'endroit où le changement doit avoir lieu. Le débit sélectionné apparaît aussi dans la simulation.
 
 Le bloc **détecter la vitesse** peut faire ce choix automatiquement. Il interroge le Minitel avec une demande de statut, essaie plusieurs vitesses et conserve celle qui répond. Les fils RX et TX doivent tous les deux être raccordés pour recevoir la réponse du Minitel.

@@ -130,7 +130,54 @@ type NotExpr = {
   operand: Expr;
 };
 
-type Expr = LiteralExpr | VariableExpr | BinaryExpr | CompareExpr | RandomExpr | LogicalExpr | NotExpr;
+type TextConcatExpr = {
+  kind: "text-concat";
+  valueType: "text";
+  left: Expr;
+  right: Expr;
+};
+
+type TextReplaceExpr = {
+  kind: "text-replace";
+  valueType: "text";
+  source: Expr;
+  search: Expr;
+  replacement: Expr;
+};
+
+type TextLengthExpr = {
+  kind: "text-length";
+  valueType: "number";
+  source: Expr;
+};
+
+type TextIndexExpr = {
+  kind: "text-index";
+  valueType: "number";
+  source: Expr;
+  search: Expr;
+};
+
+type TextPredicateExpr = {
+  kind: "text-contains" | "text-starts" | "text-ends";
+  valueType: "boolean";
+  source: Expr;
+  search: Expr;
+};
+
+type Expr =
+  | LiteralExpr
+  | VariableExpr
+  | BinaryExpr
+  | CompareExpr
+  | RandomExpr
+  | LogicalExpr
+  | NotExpr
+  | TextConcatExpr
+  | TextReplaceExpr
+  | TextLengthExpr
+  | TextIndexExpr
+  | TextPredicateExpr;
 type InputValue = string | number | boolean | Expr;
 type Values = Record<string, InputValue>;
 
@@ -242,7 +289,7 @@ type DropLocation = {
   index: number;
 };
 
-type ExpressionPathPart = "left" | "right" | "from" | "to" | "operand";
+type ExpressionPathPart = "left" | "right" | "from" | "to" | "operand" | "source" | "search" | "replacement";
 
 type ExpressionDropOwner =
   | { owner: "block"; stackId: string; blockId: string; inputKey: string }
@@ -444,6 +491,11 @@ const randomExpr = (from: Expr, to: Expr): Expr => ({ kind: "random", valueType:
 const compareExpr = (left: Expr, op: CompareExpr["op"], right: Expr): Expr => ({ kind: "compare", valueType: "boolean", op, left, right });
 const logicalExpr = (left: Expr, op: LogicalExpr["op"], right: Expr): Expr => ({ kind: "logical", valueType: "boolean", op, left, right });
 const notExpr = (operand: Expr): Expr => ({ kind: "not", valueType: "boolean", operand });
+const textConcatExpr = (left: Expr, right: Expr): TextConcatExpr => ({ kind: "text-concat", valueType: "text", left, right });
+const textReplaceExpr = (source: Expr, search: Expr, replacement: Expr): TextReplaceExpr => ({ kind: "text-replace", valueType: "text", source, search, replacement });
+const textLengthExpr = (source: Expr): TextLengthExpr => ({ kind: "text-length", valueType: "number", source });
+const textIndexExpr = (source: Expr, search: Expr): TextIndexExpr => ({ kind: "text-index", valueType: "number", source, search });
+const textPredicateExpr = (kind: TextPredicateExpr["kind"], source: Expr, search: Expr): TextPredicateExpr => ({ kind, valueType: "boolean", source, search });
 
 function expressionOperatorGlyph(op: BinaryExpr["op"] | CompareExpr["op"] | LogicalExpr["op"]) {
   if (op === "-") return "\u2212";
@@ -935,17 +987,17 @@ const blockDefinitions: BlockDefinition[] = [
   ] },
   { id: "cursor-toggle", title: "curseur", help: "Affiche ou masque le curseur du Minitel.", kind: "action", category: "screen", color: "#2785ff", inputs: [{ key: "enabled", label: "état", type: "select", defaultValue: "on", options: [{ label: "visible", value: "on" }, { label: "caché", value: "off" }] }] },
 
-  { id: "print-text", title: "écrire", help: "Écrit à la position actuelle du curseur.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "text", label: "texte", type: "text", defaultValue: "Salut Minitel" }] },
-  { id: "print-line", title: "écrire une ligne", help: "Écrit un texte puis passe à la ligne.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "text", label: "texte", type: "text", defaultValue: "Prêt" }] },
+  { id: "print-text", title: "écrire", help: "Écrit à la position actuelle du curseur. Le texte accepte les variables et les opérations Texte.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Salut Minitel") }] },
+  { id: "print-line", title: "écrire une ligne", help: "Écrit un texte puis passe à la ligne. Le texte accepte les variables et les opérations Texte.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Prêt") }] },
   { id: "print-at", title: "écrire à", help: "Place le curseur puis écrit un texte.", kind: "action", category: "text", color: "#8f5cf7", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
     { key: "row", label: "ligne", type: "number", defaultValue: num(3), min: 1, max: 24, compact: true },
-    { key: "text", label: "texte", type: "text", defaultValue: "Bonjour" },
+    { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour") },
   ] },
   { id: "big-text-at", title: "grand texte à", help: "Écrit avec la taille double du Minitel.", kind: "action", category: "text", color: "#8f5cf7", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
     { key: "row", label: "ligne", type: "number", defaultValue: num(5), min: 1, max: 24, compact: true },
-    { key: "text", label: "texte", type: "text", defaultValue: "MINITEL" },
+    { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("MINITEL") },
   ] },
   { id: "text-size", title: "taille du texte", help: "Change la taille utilisée par les prochains textes.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "size", label: "taille", type: "select", defaultValue: "Normal", options: textSizeOptions }] },
 
@@ -983,7 +1035,7 @@ const blockDefinitions: BlockDefinition[] = [
   ] },
   { id: "var-set-text", title: "mettre texte à", help: "Remplace le contenu d'une variable Texte.", kind: "action", category: "variables", color: "#e75669", inputs: [
     { key: "variable", label: "variable", type: "variable", defaultValue: "texte", variableType: "text" },
-    { key: "text", label: "texte", type: "text", defaultValue: "Bonjour", placeholder: "Texte à mémoriser" },
+    { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour"), placeholder: "Texte à mémoriser" },
   ] },
   { id: "var-show", title: "afficher variable à", help: "Écrit la valeur d'une variable Nombre ou Texte à l'écran.", kind: "action", category: "variables", color: "#f25f5c", inputs: [
     { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable", variableType: "any" },
@@ -1002,6 +1054,13 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "operator-and", title: "condition et condition", help: "Vrai uniquement si les deux conditions sont vraies.", kind: "value", category: "operators", color: "#59b45f", output: logicalExpr(compareExpr(num(0), ">", num(0)), "&&", compareExpr(num(0), ">", num(0))) },
   { id: "operator-or", title: "condition ou condition", help: "Vrai si au moins une des deux conditions est vraie.", kind: "value", category: "operators", color: "#59b45f", output: logicalExpr(compareExpr(num(0), ">", num(0)), "||", compareExpr(num(0), ">", num(0))) },
   { id: "operator-not", title: "non condition", help: "Inverse une condition vraie ou fausse.", kind: "value", category: "operators", color: "#59b45f", output: notExpr(compareExpr(num(0), ">", num(0))) },
+  { id: "operator-text-concat", title: "concaténer deux textes", help: "Assemble deux textes. Chaque emplacement accepte une variable ou une autre opération Texte.", kind: "value", category: "operators", color: "#2f9f68", output: textConcatExpr(textExpr("Bonjour "), textExpr("Minitel")) },
+  { id: "operator-text-replace", title: "remplacer dans un texte", help: "Remplace toutes les occurrences d'un texte par un autre.", kind: "value", category: "operators", color: "#2f9f68", output: textReplaceExpr(textExpr("Bonjour Minitel"), textExpr("Bonjour"), textExpr("Salut")) },
+  { id: "operator-text-length", title: "longueur du texte", help: "Donne le nombre de caractères du texte. Ce bloc produit un nombre.", kind: "value", category: "operators", color: "#2f9f68", output: textLengthExpr(textExpr("Minitel")) },
+  { id: "operator-text-index", title: "position dans le texte", help: "Donne la première position du texte recherché, à partir de 0. Renvoie -1 s'il est absent.", kind: "value", category: "operators", color: "#2f9f68", output: textIndexExpr(textExpr("Bonjour Minitel"), textExpr("Minitel")) },
+  { id: "operator-text-contains", title: "texte contient", help: "Vrai si le premier texte contient le second.", kind: "value", category: "operators", color: "#35a85b", output: textPredicateExpr("text-contains", textExpr("Bonjour Minitel"), textExpr("Minitel")) },
+  { id: "operator-text-starts", title: "texte commence par", help: "Vrai si le texte commence par la valeur indiquée.", kind: "value", category: "operators", color: "#35a85b", output: textPredicateExpr("text-starts", textExpr("Bonjour Minitel"), textExpr("Bonjour")) },
+  { id: "operator-text-ends", title: "texte se termine par", help: "Vrai si le texte se termine par la valeur indiquée.", kind: "value", category: "operators", color: "#35a85b", output: textPredicateExpr("text-ends", textExpr("Bonjour Minitel"), textExpr("Minitel")) },
 
   { id: "show-key", title: "afficher la touche reçue", help: "Écrit la touche lue par le Minitel, dans une pile de touche.", kind: "action", category: "input", color: "#e14d72", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
@@ -1136,6 +1195,15 @@ function normalizeImportedNumberExpr(value: unknown, fallback: Expr = num(0)): E
       normalizeImportedNumberExpr(record.to, num(10)),
     );
   }
+  if (record.kind === "text-length") {
+    return textLengthExpr(normalizeImportedTextValueExpr(record.source));
+  }
+  if (record.kind === "text-index") {
+    return textIndexExpr(
+      normalizeImportedTextValueExpr(record.source),
+      normalizeImportedTextValueExpr(record.search),
+    );
+  }
   return cloneValue(fallback);
 }
 
@@ -1150,6 +1218,19 @@ function normalizeImportedTextValueExpr(value: unknown, fallback: Expr = textExp
   const record = importedRecord(value);
   if (record?.kind === "variable" && record.valueType === "text" && typeof record.name === "string" && record.name.trim()) {
     return { kind: "variable", valueType: "text", name: record.name.trim().slice(0, 64) };
+  }
+  if (record?.kind === "text-concat") {
+    return textConcatExpr(
+      normalizeImportedTextValueExpr(record.left),
+      normalizeImportedTextValueExpr(record.right),
+    );
+  }
+  if (record?.kind === "text-replace") {
+    return textReplaceExpr(
+      normalizeImportedTextValueExpr(record.source),
+      normalizeImportedTextValueExpr(record.search),
+      normalizeImportedTextValueExpr(record.replacement),
+    );
   }
   return normalizeImportedTextExpr(value, fallback);
 }
@@ -1173,6 +1254,13 @@ function normalizeImportedCondition(value: unknown, fallback: Expr): Expr {
   }
   if (record?.kind === "not") {
     return notExpr(normalizeImportedCondition(record.operand, emptyCondition));
+  }
+  if (record && ["text-contains", "text-starts", "text-ends"].includes(String(record.kind))) {
+    return textPredicateExpr(
+      String(record.kind) as TextPredicateExpr["kind"],
+      normalizeImportedTextValueExpr(record.source),
+      normalizeImportedTextValueExpr(record.search),
+    );
   }
   if (record?.kind === "literal" && typeof record.value === "boolean") {
     return boolExpr(record.value);
@@ -1847,6 +1935,20 @@ function exprCode(value: InputValue | undefined, fallback: Expr = num(0)): strin
       return "(" + exprCode(expr.left, boolExpr(false)) + " " + expr.op + " " + exprCode(expr.right, boolExpr(false)) + ")";
     case "not":
       return "(!(" + exprCode(expr.operand, boolExpr(false)) + "))";
+    case "text-concat":
+      return "(String(" + exprCode(expr.left, textExpr("")) + ") + String(" + exprCode(expr.right, textExpr("")) + "))";
+    case "text-replace":
+      return "mbsTextReplace(String(" + exprCode(expr.source, textExpr("")) + "), String(" + exprCode(expr.search, textExpr("")) + "), String(" + exprCode(expr.replacement, textExpr("")) + "))";
+    case "text-length":
+      return "((int)String(" + exprCode(expr.source, textExpr("")) + ").length())";
+    case "text-index":
+      return "((int)String(" + exprCode(expr.source, textExpr("")) + ").indexOf(String(" + exprCode(expr.search, textExpr("")) + ")))";
+    case "text-contains":
+      return "(String(" + exprCode(expr.source, textExpr("")) + ").indexOf(String(" + exprCode(expr.search, textExpr("")) + ")) >= 0)";
+    case "text-starts":
+      return "String(" + exprCode(expr.source, textExpr("")) + ").startsWith(String(" + exprCode(expr.search, textExpr("")) + "))";
+    case "text-ends":
+      return "String(" + exprCode(expr.source, textExpr("")) + ").endsWith(String(" + exprCode(expr.search, textExpr("")) + "))";
   }
 }
 
@@ -1875,9 +1977,21 @@ function exprPreviewNumber(value: InputValue | undefined, variables: Record<stri
       const high = Math.max(first, last);
       return low + Math.floor(Math.random() * (high - low + 1));
     }
+    case "text-length":
+      return exprPreviewText(expr.source, variables).length;
+    case "text-index":
+      return exprPreviewText(expr.source, variables).indexOf(exprPreviewText(expr.search, variables));
+    case "text-concat":
+    case "text-replace": {
+      const numericValue = Number(exprPreviewText(expr, variables));
+      return Number.isFinite(numericValue) ? numericValue : 0;
+    }
     case "compare":
     case "logical":
     case "not":
+    case "text-contains":
+    case "text-starts":
+    case "text-ends":
       return exprPreviewBoolean(expr, variables) ? 1 : 0;
   }
 }
@@ -1905,6 +2019,13 @@ function exprPreviewBoolean(value: InputValue | undefined, variables: Record<str
   if (expr.kind === "not") {
     return !exprPreviewBoolean(expr.operand, variables);
   }
+  if (expr.kind === "text-contains" || expr.kind === "text-starts" || expr.kind === "text-ends") {
+    const source = exprPreviewText(expr.source, variables);
+    const search = exprPreviewText(expr.search, variables);
+    if (expr.kind === "text-contains") return source.includes(search);
+    if (expr.kind === "text-starts") return source.startsWith(search);
+    return source.endsWith(search);
+  }
   return exprPreviewNumber(expr, variables) !== 0;
 }
 
@@ -1912,6 +2033,14 @@ function exprPreviewText(value: InputValue | undefined, variables: Record<string
   const expr = textExpression(value);
   if (expr.kind === "variable") return String(variables[expr.name] ?? fallback);
   if (expr.kind === "literal") return String(expr.value ?? "");
+  if (expr.kind === "text-concat") {
+    return exprPreviewText(expr.left, variables) + exprPreviewText(expr.right, variables);
+  }
+  if (expr.kind === "text-replace") {
+    const source = exprPreviewText(expr.source, variables);
+    const search = exprPreviewText(expr.search, variables);
+    return search ? source.split(search).join(exprPreviewText(expr.replacement, variables)) : source;
+  }
   return fallback;
 }
 
@@ -1934,7 +2063,23 @@ function expressionLabel(value: InputValue | undefined): string {
   if (value.kind === "logical") {
     return expressionLabel(value.left) + " " + expressionOperatorGlyph(value.op) + " " + expressionLabel(value.right);
   }
-  return "non " + expressionLabel(value.operand);
+  if (value.kind === "not") {
+    return "non " + expressionLabel(value.operand);
+  }
+  if (value.kind === "text-concat") {
+    return expressionLabel(value.left) + " + " + expressionLabel(value.right);
+  }
+  if (value.kind === "text-replace") {
+    return "remplacer " + expressionLabel(value.search) + " par " + expressionLabel(value.replacement);
+  }
+  if (value.kind === "text-length") {
+    return "longueur de " + expressionLabel(value.source);
+  }
+  if (value.kind === "text-index") {
+    return "position de " + expressionLabel(value.search) + " dans " + expressionLabel(value.source);
+  }
+  const predicate = value.kind === "text-contains" ? " contient " : value.kind === "text-starts" ? " commence par " : " se termine par ";
+  return expressionLabel(value.source) + predicate + expressionLabel(value.search);
 }
 
 function replaceVariableReference(value: InputValue, variableName: string, numberReplacement: Expr, textReplacement: Expr): InputValue {
@@ -1943,7 +2088,7 @@ function replaceVariableReference(value: InputValue, variableName: string, numbe
     if (value.name !== variableName) return value;
     return cloneValue(value.valueType === "text" ? textReplacement : numberReplacement);
   }
-  if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
+  if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical" || value.kind === "text-concat") {
     return {
       ...value,
       left: replaceVariableReference(value.left, variableName, numberReplacement, textReplacement) as Expr,
@@ -1959,6 +2104,24 @@ function replaceVariableReference(value: InputValue, variableName: string, numbe
   }
   if (value.kind === "not") {
     return { ...value, operand: replaceVariableReference(value.operand, variableName, numberReplacement, textReplacement) as Expr };
+  }
+  if (value.kind === "text-replace") {
+    return {
+      ...value,
+      source: replaceVariableReference(value.source, variableName, numberReplacement, textReplacement) as Expr,
+      search: replaceVariableReference(value.search, variableName, numberReplacement, textReplacement) as Expr,
+      replacement: replaceVariableReference(value.replacement, variableName, numberReplacement, textReplacement) as Expr,
+    };
+  }
+  if (value.kind === "text-length") {
+    return { ...value, source: replaceVariableReference(value.source, variableName, numberReplacement, textReplacement) as Expr };
+  }
+  if (value.kind === "text-index" || value.kind === "text-contains" || value.kind === "text-starts" || value.kind === "text-ends") {
+    return {
+      ...value,
+      source: replaceVariableReference(value.source, variableName, numberReplacement, textReplacement) as Expr,
+      search: replaceVariableReference(value.search, variableName, numberReplacement, textReplacement) as Expr,
+    };
   }
   return value;
 }
@@ -2059,7 +2222,7 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
         addVariable(value.name, value.valueType === "text" ? "text" : "number");
         return;
       }
-      if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical") {
+      if (value.kind === "binary" || value.kind === "compare" || value.kind === "logical" || value.kind === "text-concat") {
         visit(value.left);
         visit(value.right);
       } else if (value.kind === "random") {
@@ -2067,6 +2230,15 @@ function collectVariableTypes(stacks: ScriptStack[], variables: VariableDef[]) {
         visit(value.to);
       } else if (value.kind === "not") {
         visit(value.operand);
+      } else if (value.kind === "text-replace") {
+        visit(value.source);
+        visit(value.search);
+        visit(value.replacement);
+      } else if (value.kind === "text-length") {
+        visit(value.source);
+      } else if (value.kind === "text-index" || value.kind === "text-contains" || value.kind === "text-starts" || value.kind === "text-ends") {
+        visit(value.source);
+        visit(value.search);
       }
     };
     Array.from(values).forEach(visit);
@@ -2166,16 +2338,16 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "minitel.cursor(" + (values.enabled === "on" ? "true" : "false") + ");");
         break;
       case "print-text":
-        pushLine(lines, indent, "minitel.sendText(" + cppString(values.text) + ");");
+        pushLine(lines, indent, "minitel.sendText(String(" + exprCode(values.text, textExpr("")) + ").c_str());");
         break;
       case "print-line":
-        pushLine(lines, indent, "minitel.sendLine(" + cppString(values.text) + ");");
+        pushLine(lines, indent, "minitel.sendLine(String(" + exprCode(values.text, textExpr("")) + ").c_str());");
         break;
       case "print-at":
-        pushLine(lines, indent, "minitel.printAt((uint8_t)(" + exprCode(values.column, num(2)) + "), (uint8_t)(" + exprCode(values.row, num(3)) + "), " + cppString(values.text) + ");");
+        pushLine(lines, indent, "minitel.printAt((uint8_t)(" + exprCode(values.column, num(2)) + "), (uint8_t)(" + exprCode(values.row, num(3)) + "), String(" + exprCode(values.text, textExpr("")) + ").c_str());");
         break;
       case "big-text-at":
-        pushLine(lines, indent, "minitel.bigTextAt((uint8_t)(" + exprCode(values.column, num(2)) + "), (uint8_t)(" + exprCode(values.row, num(5)) + "), " + cppString(values.text) + ");");
+        pushLine(lines, indent, "minitel.bigTextAt((uint8_t)(" + exprCode(values.column, num(2)) + "), (uint8_t)(" + exprCode(values.row, num(5)) + "), String(" + exprCode(values.text, textExpr("")) + ").c_str());");
         break;
       case "text-size":
         pushLine(lines, indent, "minitel.setTextSize(MinitelESP32::TextSize::" + textValue(values.size, "Normal") + ");");
@@ -2202,7 +2374,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, sanitizeIdentifier(textValue(values.variable, "maVariable")) + " += (int)(" + exprCode(values.delta, num(1)) + ");");
         break;
       case "var-set-text":
-        pushLine(lines, indent, sanitizeIdentifier(textValue(values.variable, "texte")) + " = " + cppString(values.text) + ";");
+        pushLine(lines, indent, sanitizeIdentifier(textValue(values.variable, "texte")) + " = String(" + exprCode(values.text, textExpr("")) + ");");
         break;
       case "var-show":
         pushLine(lines, indent, "minitel.moveTo((uint8_t)(" + exprCode(values.column, num(2)) + "), (uint8_t)(" + exprCode(values.row, num(20)) + "));");
@@ -2472,6 +2644,12 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
     "  long low = first < second ? first : second;",
     "  long high = first < second ? second : first;",
     "  return low == high ? low : random(low, high + 1);",
+    "}",
+    "",
+    "String mbsTextReplace(String value, const String &search, const String &replacement) {",
+    "  if (search.length() == 0) return value;",
+    "  value.replace(search, replacement);",
+    "  return value;",
     "}",
   );
 
@@ -2885,18 +3063,18 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         state.messages.push(values.enabled === "on" ? "Curseur visible" : "Curseur caché");
         break;
       case "print-text":
-        writePreviewText(state, textValue(values.text, ""));
+        writePreviewText(state, exprPreviewText(values.text, state.variables));
         break;
       case "print-line":
-        writePreviewText(state, textValue(values.text, "") + "\n");
+        writePreviewText(state, exprPreviewText(values.text, state.variables) + "\n");
         break;
       case "print-at":
         setCursor(state, exprPreviewNumber(values.column, state.variables, 2), exprPreviewNumber(values.row, state.variables, 3));
-        writePreviewText(state, textValue(values.text, ""));
+        writePreviewText(state, exprPreviewText(values.text, state.variables));
         break;
       case "big-text-at":
         setCursor(state, exprPreviewNumber(values.column, state.variables, 2), exprPreviewNumber(values.row, state.variables, 5));
-        writePreviewText(state, textValue(values.text, "").toUpperCase());
+        writePreviewText(state, exprPreviewText(values.text, state.variables).toUpperCase());
         break;
       case "text-size":
         state.textSize = textValue(values.size, "Normal");
@@ -2930,7 +3108,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       }
       case "var-set-text": {
         const name = textValue(values.variable, "texte");
-        state.variables[name] = textValue(values.text, "");
+        state.variables[name] = exprPreviewText(values.text, state.variables);
         state.messages.push(name + " = « " + state.variables[name] + " »");
         break;
       }
@@ -3347,12 +3525,12 @@ function numberExpression(value: InputValue | undefined): Expr {
 }
 
 function textExpression(value: InputValue | undefined): Expr {
-  if (isExpr(value) && value.valueType === "text" && (value.kind === "literal" || value.kind === "variable")) return value;
+  if (isExpr(value) && value.valueType === "text") return value;
   if (["string", "number", "boolean"].includes(typeof value)) return textExpr(String(value));
   return textExpr("");
 }
 
-type BooleanExpression = LiteralExpr | CompareExpr | LogicalExpr | NotExpr;
+type BooleanExpression = LiteralExpr | CompareExpr | LogicalExpr | NotExpr | TextPredicateExpr;
 
 function booleanExpression(value: InputValue | undefined, variables: VariableDef[]): BooleanExpression {
   if (isExpr(value) && value.valueType === "boolean") return value as BooleanExpression;
@@ -3363,7 +3541,7 @@ function booleanExpression(value: InputValue | undefined, variables: VariableDef
 function replaceExprAtPath(root: Expr, path: ExpressionPathPart[], replacement: Expr): Expr {
   if (path.length === 0) return cloneValue(replacement);
   const [part, ...rest] = path;
-  if (root.kind === "binary" || root.kind === "compare" || root.kind === "logical") {
+  if (root.kind === "binary" || root.kind === "compare" || root.kind === "logical" || root.kind === "text-concat") {
     if (part === "left") return { ...root, left: replaceExprAtPath(root.left, rest, replacement) };
     if (part === "right") return { ...root, right: replaceExprAtPath(root.right, rest, replacement) };
     return root;
@@ -3375,6 +3553,19 @@ function replaceExprAtPath(root: Expr, path: ExpressionPathPart[], replacement: 
   }
   if (root.kind === "not" && part === "operand") {
     return { ...root, operand: replaceExprAtPath(root.operand, rest, replacement) };
+  }
+  if (root.kind === "text-replace") {
+    if (part === "source") return { ...root, source: replaceExprAtPath(root.source, rest, replacement) };
+    if (part === "search") return { ...root, search: replaceExprAtPath(root.search, rest, replacement) };
+    if (part === "replacement") return { ...root, replacement: replaceExprAtPath(root.replacement, rest, replacement) };
+    return root;
+  }
+  if (root.kind === "text-length" && part === "source") {
+    return { ...root, source: replaceExprAtPath(root.source, rest, replacement) };
+  }
+  if (root.kind === "text-index" || root.kind === "text-contains" || root.kind === "text-starts" || root.kind === "text-ends") {
+    if (part === "source") return { ...root, source: replaceExprAtPath(root.source, rest, replacement) };
+    if (part === "search") return { ...root, search: replaceExprAtPath(root.search, rest, replacement) };
   }
   return root;
 }
@@ -3428,7 +3619,7 @@ function duplicateBlockInList(blocks: ProgramBlock[], blockId: string): { blocks
   return { blocks: next, done, duplicateIds };
 }
 
-type NumberExpressionMode = "literal" | "variable" | "binary" | "random";
+type NumberExpressionMode = "literal" | "variable" | "binary" | "random" | "text-length" | "text-index";
 
 function ExpressionKindSwitch({
   mode,
@@ -3442,6 +3633,8 @@ function ExpressionKindSwitch({
     variable: "Variable",
     binary: "Calcul",
     random: "Aléatoire",
+    "text-length": "Longueur du texte",
+    "text-index": "Position dans le texte",
   };
 
   return (
@@ -3452,6 +3645,8 @@ function ExpressionKindSwitch({
         <option value="variable">Variable</option>
         <option value="binary">Calcul</option>
         <option value="random">Aléatoire</option>
+        <option value="text-length">Longueur du texte</option>
+        <option value="text-index">Position dans le texte</option>
       </select>
     </span>
   );
@@ -3492,16 +3687,26 @@ function NumberExpressionNode({
 }) {
   const expr = numberExpression(value);
   const numberVariables = variables.filter((variable) => variableValueType(variable) === "number");
+  const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
+  const preferredTextVariable = textVariables.find((variable) => variable.name === "texte") ?? textVariables[0];
+  const defaultTextSource = () => preferredTextVariable ? variableReferenceExpr(preferredTextVariable) : textExpr("Minitel");
   const mode: NumberExpressionMode = expr.kind === "binary"
     ? "binary"
     : expr.kind === "random"
       ? "random"
-      : expr.kind === "variable"
-        ? "variable"
-        : "literal";
+      : expr.kind === "text-length"
+        ? "text-length"
+        : expr.kind === "text-index"
+          ? "text-index"
+          : expr.kind === "variable"
+            ? "variable"
+            : "literal";
   const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
-  const childLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+  const numberLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
     dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "number" } : undefined
+  );
+  const textLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "text" } : undefined
   );
 
   const changeMode = (nextMode: NumberExpressionMode) => {
@@ -3511,6 +3716,10 @@ function NumberExpressionNode({
       onChange(binaryExpr("+", cloneValue(expr), num(0)));
     } else if (nextMode === "random") {
       onChange(randomExpr(num(1), num(10)));
+    } else if (nextMode === "text-length") {
+      onChange(textLengthExpr(defaultTextSource()));
+    } else if (nextMode === "text-index") {
+      onChange(textIndexExpr(defaultTextSource(), textExpr("Minitel")));
     } else {
       onChange(num(expr.kind === "literal" && expr.valueType === "number" ? Number(expr.value) || 0 : 0));
     }
@@ -3526,7 +3735,7 @@ function NumberExpressionNode({
       {mode === "binary" && expr.kind === "binary" ? (
         <>
           <span className="binary-expression-tree">
-            <NumberExpressionNode value={expr.left} variables={variables} dropLocation={childLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+            <NumberExpressionNode value={expr.left} variables={variables} dropLocation={numberLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
             <ExpressionOperatorSwitch
               value={expr.op}
               label="Choisir l'opération"
@@ -3539,7 +3748,7 @@ function NumberExpressionNode({
               ]}
               onChange={(next) => onChange({ ...expr, op: next as BinaryExpr["op"] })}
             />
-            <NumberExpressionNode value={expr.right} variables={variables} dropLocation={childLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+            <NumberExpressionNode value={expr.right} variables={variables} dropLocation={numberLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
           </span>
           <ExpressionKindSwitch mode={mode} onChange={changeMode} />
         </>
@@ -3547,9 +3756,27 @@ function NumberExpressionNode({
         <>
           <span className="random-expression-tree">
             <strong className="random-expression-label">aléatoire</strong>
-            <NumberExpressionNode value={expr.from} variables={variables} dropLocation={childLocation("from")} onChange={(next) => onChange({ ...expr, from: next })} />
+            <NumberExpressionNode value={expr.from} variables={variables} dropLocation={numberLocation("from")} onChange={(next) => onChange({ ...expr, from: next })} />
             <span className="random-expression-separator">à</span>
-            <NumberExpressionNode value={expr.to} variables={variables} dropLocation={childLocation("to")} onChange={(next) => onChange({ ...expr, to: next })} />
+            <NumberExpressionNode value={expr.to} variables={variables} dropLocation={numberLocation("to")} onChange={(next) => onChange({ ...expr, to: next })} />
+          </span>
+          <ExpressionKindSwitch mode={mode} onChange={changeMode} />
+        </>
+      ) : mode === "text-length" && expr.kind === "text-length" ? (
+        <>
+          <span className="text-number-expression-tree">
+            <strong className="text-operation-label">longueur de</strong>
+            <TextExpressionNode value={expr.source} variables={variables} dropLocation={textLocation("source")} onChange={(next) => onChange({ ...expr, source: next })} />
+          </span>
+          <ExpressionKindSwitch mode={mode} onChange={changeMode} />
+        </>
+      ) : mode === "text-index" && expr.kind === "text-index" ? (
+        <>
+          <span className="text-number-expression-tree">
+            <strong className="text-operation-label">position de</strong>
+            <TextExpressionNode value={expr.search} variables={variables} dropLocation={textLocation("search")} onChange={(next) => onChange({ ...expr, search: next })} />
+            <strong className="text-operation-label">dans</strong>
+            <TextExpressionNode value={expr.source} variables={variables} dropLocation={textLocation("source")} onChange={(next) => onChange({ ...expr, source: next })} />
           </span>
           <ExpressionKindSwitch mode={mode} onChange={changeMode} />
         </>
@@ -3601,7 +3828,129 @@ function NumberExpressionEditor({
   );
 }
 
-type TextExpressionMode = "literal" | "variable";
+type TextExpressionMode = "literal" | "variable" | "concat" | "replace";
+
+function TextExpressionKindSwitch({
+  mode,
+  textVariables,
+  onChange,
+}: {
+  mode: TextExpressionMode;
+  textVariables: VariableDef[];
+  onChange: (mode: TextExpressionMode) => void;
+}) {
+  const labels: Record<TextExpressionMode, string> = {
+    literal: "Texte saisi",
+    variable: "Variable Texte",
+    concat: "Concaténer",
+    replace: "Remplacer",
+  };
+  return (
+    <span className={"expression-kind-switch is-" + mode} title={"Changer le type : " + labels[mode]}>
+      <ChevronDown size={11} aria-hidden="true" />
+      <select value={mode} aria-label="Type de texte" onChange={(event) => onChange(event.target.value as TextExpressionMode)}>
+        <option value="literal">Texte saisi</option>
+        <option value="variable" disabled={textVariables.length === 0}>Variable Texte</option>
+        <option value="concat">Concaténer</option>
+        <option value="replace">Remplacer</option>
+      </select>
+    </span>
+  );
+}
+
+function TextExpressionNode({
+  value,
+  variables,
+  onChange,
+  dropLocation,
+}: {
+  value: Expr;
+  variables: VariableDef[];
+  onChange: (value: Expr) => void;
+  dropLocation?: ExpressionDropLocation;
+}) {
+  const expr = textExpression(value);
+  const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
+  const preferredTextVariable = textVariables.find((variable) => variable.name === "texte") ?? textVariables[0];
+  const mode: TextExpressionMode = expr.kind === "text-concat"
+    ? "concat"
+    : expr.kind === "text-replace"
+      ? "replace"
+      : expr.kind === "variable"
+        ? "variable"
+        : "literal";
+  const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
+  const childLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "text" } : undefined
+  );
+  const changeMode = (nextMode: TextExpressionMode) => {
+    if (nextMode === "variable") {
+      onChange(preferredTextVariable ? variableReferenceExpr(preferredTextVariable) : textExpr(""));
+    } else if (nextMode === "concat") {
+      onChange(textConcatExpr(cloneValue(expr), textExpr("")));
+    } else if (nextMode === "replace") {
+      onChange(textReplaceExpr(cloneValue(expr), textExpr("ancien"), textExpr("nouveau")));
+    } else {
+      onChange(textExpr(expr.kind === "literal" ? String(expr.value ?? "") : ""));
+    }
+  };
+
+  return (
+    <span
+      className={"text-expression-node expression-" + mode}
+      data-expression-drop={dropLocation ? JSON.stringify(dropLocation) : undefined}
+      data-expression-drop-key={dropKey}
+      data-expression-accepts={dropLocation?.accepts}
+    >
+      {mode === "concat" && expr.kind === "text-concat" ? (
+        <>
+          <span className="text-operation-tree">
+            <TextExpressionNode value={expr.left} variables={variables} dropLocation={childLocation("left")} onChange={(next) => onChange({ ...expr, left: next })} />
+            <strong className="text-operation-label">avec</strong>
+            <TextExpressionNode value={expr.right} variables={variables} dropLocation={childLocation("right")} onChange={(next) => onChange({ ...expr, right: next })} />
+          </span>
+          <TextExpressionKindSwitch mode={mode} textVariables={textVariables} onChange={changeMode} />
+        </>
+      ) : mode === "replace" && expr.kind === "text-replace" ? (
+        <>
+          <span className="text-operation-tree">
+            <strong className="text-operation-label">dans</strong>
+            <TextExpressionNode value={expr.source} variables={variables} dropLocation={childLocation("source")} onChange={(next) => onChange({ ...expr, source: next })} />
+            <strong className="text-operation-label">remplacer</strong>
+            <TextExpressionNode value={expr.search} variables={variables} dropLocation={childLocation("search")} onChange={(next) => onChange({ ...expr, search: next })} />
+            <strong className="text-operation-label">par</strong>
+            <TextExpressionNode value={expr.replacement} variables={variables} dropLocation={childLocation("replacement")} onChange={(next) => onChange({ ...expr, replacement: next })} />
+          </span>
+          <TextExpressionKindSwitch mode={mode} textVariables={textVariables} onChange={changeMode} />
+        </>
+      ) : (
+        <>
+          {mode === "variable" && expr.kind === "variable" ? (
+            <select
+              className="expression-variable-select"
+              value={textVariables.some((variable) => variable.name === expr.name) ? expr.name : preferredTextVariable?.name ?? ""}
+              aria-label="Variable Texte"
+              onChange={(event) => onChange({ ...expr, name: event.target.value })}
+              disabled={textVariables.length === 0}
+            >
+              {textVariables.length === 0 ? <option value="">Aucune variable Texte</option> : null}
+              {textVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+            </select>
+          ) : (
+            <input
+              type="text"
+              maxLength={1024}
+              aria-label="Texte"
+              value={expr.kind === "literal" ? String(expr.value ?? "") : ""}
+              onChange={(event) => onChange(textExpr(event.target.value))}
+            />
+          )}
+          <TextExpressionKindSwitch mode={mode} textVariables={textVariables} onChange={changeMode} />
+        </>
+      )}
+    </span>
+  );
+}
 
 function TextExpressionEditor({
   value,
@@ -3615,57 +3964,12 @@ function TextExpressionEditor({
   expressionOwner?: ExpressionDropOwner;
 }) {
   const expr = textExpression(value);
-  const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
-  const preferredTextVariable = textVariables.find((variable) => variable.name === "texte") ?? textVariables[0];
-  const mode: TextExpressionMode = expr.kind === "variable" ? "variable" : "literal";
   const dropLocation: ExpressionDropLocation | undefined = expressionOwner
     ? { ...expressionOwner, path: [], accepts: "text" }
     : undefined;
-  const dropKey = dropLocation ? expressionDropLocationKey(dropLocation) : undefined;
-  const changeMode = (nextMode: TextExpressionMode) => {
-    if (nextMode === "variable") {
-      onChange(preferredTextVariable ? variableReferenceExpr(preferredTextVariable) : textExpr(""));
-    } else {
-      onChange(textExpr(expr.kind === "literal" ? String(expr.value ?? "") : ""));
-    }
-  };
-
   return (
     <span className="expression-pill text-expression">
-      <span
-        className={"text-expression-node expression-" + mode}
-        data-expression-drop={dropLocation ? JSON.stringify(dropLocation) : undefined}
-        data-expression-drop-key={dropKey}
-        data-expression-accepts={dropLocation?.accepts}
-      >
-        {mode === "variable" && expr.kind === "variable" ? (
-          <select
-            className="expression-variable-select"
-            value={textVariables.some((variable) => variable.name === expr.name) ? expr.name : preferredTextVariable?.name ?? ""}
-            aria-label="Variable Texte"
-            onChange={(event) => onChange({ ...expr, name: event.target.value })}
-            disabled={textVariables.length === 0}
-          >
-            {textVariables.length === 0 ? <option value="">Aucune variable Texte</option> : null}
-            {textVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
-          </select>
-        ) : (
-          <input
-            type="text"
-            maxLength={1024}
-            aria-label="Texte du message"
-            value={expr.kind === "literal" ? String(expr.value ?? "") : ""}
-            onChange={(event) => onChange(textExpr(event.target.value))}
-          />
-        )}
-        <span className={"expression-kind-switch is-" + mode} title={mode === "literal" ? "Utiliser une variable Texte" : "Saisir un texte"}>
-          <ChevronDown size={11} aria-hidden="true" />
-          <select value={mode} aria-label="Type de texte" onChange={(event) => changeMode(event.target.value as TextExpressionMode)}>
-            <option value="literal">Texte saisi</option>
-            <option value="variable" disabled={textVariables.length === 0}>Variable Texte</option>
-          </select>
-        </span>
-      </span>
+      <TextExpressionNode value={expr} variables={variables} onChange={onChange} dropLocation={dropLocation} />
     </span>
   );
 }
@@ -3688,6 +3992,9 @@ function BooleanExpressionNode({
   );
   const numberLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
     dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "number" } : undefined
+  );
+  const textLocation = (part: ExpressionPathPart): ExpressionDropLocation | undefined => (
+    dropLocation ? { ...dropLocation, path: [...dropLocation.path, part], accepts: "text" } : undefined
   );
 
   return (
@@ -3734,8 +4041,16 @@ function BooleanExpressionNode({
           <strong className="condition-not-label">non</strong>
           <BooleanExpressionNode value={expr.operand} variables={variables} dropLocation={booleanLocation("operand")} onChange={(next) => onChange({ ...expr, operand: next })} />
         </span>
+      ) : expr.kind === "text-contains" || expr.kind === "text-starts" || expr.kind === "text-ends" ? (
+        <span className="text-predicate-expression-tree">
+          <TextExpressionNode value={expr.source} variables={variables} dropLocation={textLocation("source")} onChange={(next) => onChange({ ...expr, source: next })} />
+          <strong className="text-predicate-label">
+            {expr.kind === "text-contains" ? "contient" : expr.kind === "text-starts" ? "commence par" : "se termine par"}
+          </strong>
+          <TextExpressionNode value={expr.search} variables={variables} dropLocation={textLocation("search")} onChange={(next) => onChange({ ...expr, search: next })} />
+        </span>
       ) : (
-        <select className="condition-literal-select" value={Boolean(expr.value) ? "true" : "false"} aria-label="Valeur logique" onChange={(event) => onChange(boolExpr(event.target.value === "true"))}>
+        <select className="condition-literal-select" value={Boolean("value" in expr && expr.value) ? "true" : "false"} aria-label="Valeur logique" onChange={(event) => onChange(boolExpr(event.target.value === "true"))}>
           <option value="true">vrai</option>
           <option value="false">faux</option>
         </select>
@@ -4086,6 +4401,54 @@ function PaletteExpressionPreview({ expression }: { expression: Expr }) {
       <span className="palette-expression-preview is-condition is-not" aria-hidden="true">
         <strong className="palette-expression-word">non</strong>
         <span className="palette-condition-operand" />
+      </span>
+    );
+  }
+  if (expression.kind === "text-concat") {
+    return (
+      <span className="palette-expression-preview is-text-operation" aria-hidden="true">
+        <span className="palette-expression-operand">A</span>
+        <strong className="palette-expression-symbol">+</strong>
+        <span className="palette-expression-operand">B</span>
+      </span>
+    );
+  }
+  if (expression.kind === "text-replace") {
+    return (
+      <span className="palette-expression-preview is-text-operation" aria-hidden="true">
+        <strong className="palette-expression-word">remplacer</strong>
+        <span className="palette-expression-operand">A</span>
+        <strong className="palette-expression-word">par</strong>
+        <span className="palette-expression-operand">B</span>
+      </span>
+    );
+  }
+  if (expression.kind === "text-length") {
+    return (
+      <span className="palette-expression-preview is-text-operation" aria-hidden="true">
+        <strong className="palette-expression-word">longueur de</strong>
+        <span className="palette-expression-operand">texte</span>
+      </span>
+    );
+  }
+  if (expression.kind === "text-index") {
+    return (
+      <span className="palette-expression-preview is-text-operation" aria-hidden="true">
+        <strong className="palette-expression-word">position</strong>
+        <span className="palette-expression-operand">A</span>
+        <strong className="palette-expression-word">dans</strong>
+        <span className="palette-expression-operand">B</span>
+      </span>
+    );
+  }
+  if (expression.kind === "text-contains" || expression.kind === "text-starts" || expression.kind === "text-ends") {
+    return (
+      <span className="palette-expression-preview is-condition is-text-predicate" aria-hidden="true">
+        <span className="palette-expression-operand">A</span>
+        <strong className="palette-expression-word">
+          {expression.kind === "text-contains" ? "contient" : expression.kind === "text-starts" ? "commence par" : "finit par"}
+        </strong>
+        <span className="palette-expression-operand">B</span>
       </span>
     );
   }

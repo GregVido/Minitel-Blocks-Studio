@@ -952,10 +952,14 @@ const baudOptions: SelectOption[] = [
   { label: "9600 bauds", value: "9600" },
 ];
 
+const TEXT_BLOCK_COLOR = "#8f5cf7";
+const MQTT_BLOCK_COLOR = "#1678a8";
+const HTTP_BLOCK_COLOR = "#b75238";
+
 const categories: Category[] = [
   { id: "start", label: "Départ", accent: "#ffb703", icon: Play },
   { id: "screen", label: "Écran", accent: "#2785ff", icon: Monitor },
-  { id: "text", label: "Texte", accent: "#8f5cf7", icon: Type },
+  { id: "text", label: "Texte", accent: TEXT_BLOCK_COLOR, icon: Type },
   { id: "colors", label: "Couleurs", accent: "#18a058", icon: Palette },
   { id: "sound", label: "Son", accent: "#ff7a1a", icon: Volume2 },
   { id: "control", label: "Contrôle", accent: "#ff9f1c", icon: Repeat },
@@ -987,19 +991,19 @@ const blockDefinitions: BlockDefinition[] = [
   ] },
   { id: "cursor-toggle", title: "curseur", help: "Affiche ou masque le curseur du Minitel.", kind: "action", category: "screen", color: "#2785ff", inputs: [{ key: "enabled", label: "état", type: "select", defaultValue: "on", options: [{ label: "visible", value: "on" }, { label: "caché", value: "off" }] }] },
 
-  { id: "print-text", title: "écrire", help: "Écrit à la position actuelle du curseur. Le texte accepte les variables et les opérations Texte.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Salut Minitel") }] },
-  { id: "print-line", title: "écrire une ligne", help: "Écrit un texte puis passe à la ligne. Le texte accepte les variables et les opérations Texte.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Prêt") }] },
-  { id: "print-at", title: "écrire à", help: "Place le curseur puis écrit un texte.", kind: "action", category: "text", color: "#8f5cf7", inputs: [
+  { id: "print-text", title: "écrire", help: "Écrit à la position actuelle du curseur. Le texte accepte les variables et les opérations Texte.", kind: "action", category: "text", color: TEXT_BLOCK_COLOR, inputs: [{ key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Salut Minitel") }] },
+  { id: "print-line", title: "écrire une ligne", help: "Écrit un texte puis passe à la ligne. Le texte accepte les variables et les opérations Texte.", kind: "action", category: "text", color: TEXT_BLOCK_COLOR, inputs: [{ key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Prêt") }] },
+  { id: "print-at", title: "écrire à", help: "Place le curseur puis écrit un texte.", kind: "action", category: "text", color: TEXT_BLOCK_COLOR, inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
     { key: "row", label: "ligne", type: "number", defaultValue: num(3), min: 1, max: 24, compact: true },
     { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour") },
   ] },
-  { id: "big-text-at", title: "grand texte à", help: "Écrit avec la taille double du Minitel.", kind: "action", category: "text", color: "#8f5cf7", inputs: [
+  { id: "big-text-at", title: "grand texte à", help: "Écrit avec la taille double du Minitel.", kind: "action", category: "text", color: TEXT_BLOCK_COLOR, inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
     { key: "row", label: "ligne", type: "number", defaultValue: num(5), min: 1, max: 24, compact: true },
     { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("MINITEL") },
   ] },
-  { id: "text-size", title: "taille du texte", help: "Change la taille utilisée par les prochains textes.", kind: "action", category: "text", color: "#8f5cf7", inputs: [{ key: "size", label: "taille", type: "select", defaultValue: "Normal", options: textSizeOptions }] },
+  { id: "text-size", title: "taille du texte", help: "Change la taille utilisée par les prochains textes.", kind: "action", category: "text", color: TEXT_BLOCK_COLOR, inputs: [{ key: "size", label: "taille", type: "select", defaultValue: "Normal", options: textSizeOptions }] },
 
   { id: "foreground", title: "texte en couleur", help: "Change la couleur des caractères.", kind: "action", category: "colors", color: "#18a058", inputs: [{ key: "color", label: "couleur", type: "color", defaultValue: "Cyan", options: colorOptions }] },
   { id: "background", title: "fond en couleur", help: "Change la couleur de fond des prochains caractères.", kind: "action", category: "colors", color: "#18a058", inputs: [{ key: "color", label: "fond", type: "color", defaultValue: "Black", options: colorOptions }] },
@@ -1033,7 +1037,7 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "variable", label: "variable", type: "variable", defaultValue: "maVariable", variableType: "number" },
     { key: "delta", label: "valeur", type: "number", defaultValue: num(1) },
   ] },
-  { id: "var-set-text", title: "mettre texte à", help: "Remplace le contenu d'une variable Texte.", kind: "action", category: "variables", color: "#e75669", inputs: [
+  { id: "var-set-text", title: "mettre texte à", help: "Remplace le contenu d'une variable Texte.", kind: "action", category: "variables", color: TEXT_BLOCK_COLOR, inputs: [
     { key: "variable", label: "variable", type: "variable", defaultValue: "texte", variableType: "text" },
     { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour"), placeholder: "Texte à mémoriser" },
   ] },
@@ -1054,13 +1058,13 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "operator-and", title: "condition et condition", help: "Vrai uniquement si les deux conditions sont vraies.", kind: "value", category: "operators", color: "#59b45f", output: logicalExpr(compareExpr(num(0), ">", num(0)), "&&", compareExpr(num(0), ">", num(0))) },
   { id: "operator-or", title: "condition ou condition", help: "Vrai si au moins une des deux conditions est vraie.", kind: "value", category: "operators", color: "#59b45f", output: logicalExpr(compareExpr(num(0), ">", num(0)), "||", compareExpr(num(0), ">", num(0))) },
   { id: "operator-not", title: "non condition", help: "Inverse une condition vraie ou fausse.", kind: "value", category: "operators", color: "#59b45f", output: notExpr(compareExpr(num(0), ">", num(0))) },
-  { id: "operator-text-concat", title: "concaténer deux textes", help: "Assemble deux textes. Chaque emplacement accepte une variable ou une autre opération Texte.", kind: "value", category: "operators", color: "#2f9f68", output: textConcatExpr(textExpr("Bonjour "), textExpr("Minitel")) },
-  { id: "operator-text-replace", title: "remplacer dans un texte", help: "Remplace toutes les occurrences d'un texte par un autre.", kind: "value", category: "operators", color: "#2f9f68", output: textReplaceExpr(textExpr("Bonjour Minitel"), textExpr("Bonjour"), textExpr("Salut")) },
-  { id: "operator-text-length", title: "longueur du texte", help: "Donne le nombre de caractères du texte. Ce bloc produit un nombre.", kind: "value", category: "operators", color: "#2f9f68", output: textLengthExpr(textExpr("Minitel")) },
-  { id: "operator-text-index", title: "position dans le texte", help: "Donne la première position du texte recherché, à partir de 0. Renvoie -1 s'il est absent.", kind: "value", category: "operators", color: "#2f9f68", output: textIndexExpr(textExpr("Bonjour Minitel"), textExpr("Minitel")) },
-  { id: "operator-text-contains", title: "texte contient", help: "Vrai si le premier texte contient le second.", kind: "value", category: "operators", color: "#35a85b", output: textPredicateExpr("text-contains", textExpr("Bonjour Minitel"), textExpr("Minitel")) },
-  { id: "operator-text-starts", title: "texte commence par", help: "Vrai si le texte commence par la valeur indiquée.", kind: "value", category: "operators", color: "#35a85b", output: textPredicateExpr("text-starts", textExpr("Bonjour Minitel"), textExpr("Bonjour")) },
-  { id: "operator-text-ends", title: "texte se termine par", help: "Vrai si le texte se termine par la valeur indiquée.", kind: "value", category: "operators", color: "#35a85b", output: textPredicateExpr("text-ends", textExpr("Bonjour Minitel"), textExpr("Minitel")) },
+  { id: "operator-text-concat", title: "concaténer deux textes", help: "Assemble deux textes. Chaque emplacement accepte une variable ou une autre opération Texte.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textConcatExpr(textExpr("Bonjour "), textExpr("Minitel")) },
+  { id: "operator-text-replace", title: "remplacer dans un texte", help: "Remplace toutes les occurrences d'un texte par un autre.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textReplaceExpr(textExpr("Bonjour Minitel"), textExpr("Bonjour"), textExpr("Salut")) },
+  { id: "operator-text-length", title: "longueur du texte", help: "Donne le nombre de caractères du texte. Ce bloc produit un nombre.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textLengthExpr(textExpr("Minitel")) },
+  { id: "operator-text-index", title: "position dans le texte", help: "Donne la première position du texte recherché, à partir de 0. Renvoie -1 s'il est absent.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textIndexExpr(textExpr("Bonjour Minitel"), textExpr("Minitel")) },
+  { id: "operator-text-contains", title: "texte contient", help: "Vrai si le premier texte contient le second.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textPredicateExpr("text-contains", textExpr("Bonjour Minitel"), textExpr("Minitel")) },
+  { id: "operator-text-starts", title: "texte commence par", help: "Vrai si le texte commence par la valeur indiquée.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textPredicateExpr("text-starts", textExpr("Bonjour Minitel"), textExpr("Bonjour")) },
+  { id: "operator-text-ends", title: "texte se termine par", help: "Vrai si le texte se termine par la valeur indiquée.", kind: "value", category: "operators", color: TEXT_BLOCK_COLOR, output: textPredicateExpr("text-ends", textExpr("Bonjour Minitel"), textExpr("Minitel")) },
 
   { id: "show-key", title: "afficher la touche reçue", help: "Écrit la touche lue par le Minitel, dans une pile de touche.", kind: "action", category: "input", color: "#e14d72", inputs: [
     { key: "column", label: "col", type: "number", defaultValue: num(2), min: 1, max: 40, compact: true },
@@ -1072,49 +1076,49 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
-  { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: "#1678a8", inputs: [
+  { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
     { key: "port", label: "port", type: "number", defaultValue: num(1883), min: 1, max: 65535, compact: true },
     { key: "clientId", label: "identifiant client", type: "text", defaultValue: "minitel-esp32", placeholder: "minitel-esp32" },
     { key: "username", label: "utilisateur", type: "text", defaultValue: "", placeholder: "Optionnel" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Optionnel", secret: true },
   ] },
-  { id: "mqtt-subscribe", title: "s'abonner au topic MQTT", help: "Écoute les messages publiés sur un topic. Place ce bloc après la connexion au broker.", kind: "action", category: "network", color: "#1678a8", inputs: [
+  { id: "mqtt-subscribe", title: "s'abonner au topic MQTT", help: "Écoute les messages publiés sur un topic. Place ce bloc après la connexion au broker.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
     { key: "qos", label: "qualité", type: "select", defaultValue: "0", options: [
       { label: "standard (QoS 0)", value: "0" },
       { label: "confirmée (QoS 1)", value: "1" },
     ] },
   ] },
-  { id: "mqtt-publish", title: "publier un message MQTT", help: "Envoie un texte sur un topic MQTT. Le message peut être saisi ou fourni par une variable Texte.", kind: "action", category: "network", color: "#1678a8", inputs: [
+  { id: "mqtt-publish", title: "publier un message MQTT", help: "Envoie un texte sur un topic MQTT. Le message peut être saisi ou fourni par une variable Texte.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
     { key: "payload", label: "message", type: "text-value", defaultValue: textExpr("Bonjour depuis le Minitel"), placeholder: "Bonjour depuis le Minitel" },
     { key: "retained", label: "conserver sur le broker", type: "boolean", defaultValue: false },
   ] },
-  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
+  { id: "http-get-json", title: "requête GET JSON", help: "Télécharge une réponse JSON. Les clés et valeurs query acceptent aussi les blocs de variables.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/test", placeholder: "http://localhost:6663/test" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
-  { id: "http-post-json", title: "requête POST JSON", help: "Envoie un corps JSON et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: "#087f70", inputs: [
+  { id: "http-post-json", title: "requête POST JSON", help: "Envoie un corps JSON et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"bonjour\"}", placeholder: "{\"message\":\"bonjour\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
-  { id: "http-put-json", title: "requête PUT JSON", help: "Met à jour une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: "#0a7282", inputs: [
+  { id: "http-put-json", title: "requête PUT JSON", help: "Met à jour une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"mise à jour\"}", placeholder: "{\"message\":\"mise à jour\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
-  { id: "http-patch-json", title: "requête PATCH JSON", help: "Modifie partiellement une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: "#3f6fc4", inputs: [
+  { id: "http-patch-json", title: "requête PATCH JSON", help: "Modifie partiellement une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"champ\":\"nouvelle valeur\"}", placeholder: "{\"champ\":\"nouvelle valeur\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
-  { id: "http-delete-json", title: "requête DELETE JSON", help: "Supprime une ressource et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: "#c05268", inputs: [
+  { id: "http-delete-json", title: "requête DELETE JSON", help: "Supprime une ressource et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
@@ -5086,7 +5090,7 @@ function App() {
       help: "Valeur de " + variable.name + ". Glisse ce bloc dans un emplacement compatible.",
       kind: "value",
       category: "variables",
-      color: variableValueType(variable) === "text" ? "#e75669" : "#f25f5c",
+      color: variableValueType(variable) === "text" ? TEXT_BLOCK_COLOR : "#f25f5c",
       output: variableReferenceExpr(variable),
     })), [variables]);
   const paletteBlockDefinitions = useMemo(() => blockDefinitions.map((definition) => {

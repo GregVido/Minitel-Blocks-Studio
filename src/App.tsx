@@ -1076,6 +1076,10 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "SSID", type: "text", defaultValue: "", placeholder: "Nom du réseau" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "", placeholder: "Mot de passe", secret: true },
   ] },
+  { id: "wifi-hotspot", title: "créer un hotspot Wi-Fi", help: "Crée un point d'accès diffusé par l'ESP32. Laisse le mot de passe vide pour un réseau ouvert, ou utilise au moins 8 caractères.", kind: "action", category: "network", color: "#0b9f8a", inputs: [
+    { key: "ssid", label: "nom du hotspot", type: "text", defaultValue: "Minitel-ESP32", placeholder: "Minitel-ESP32" },
+    { key: "password", label: "mot de passe", type: "text", defaultValue: "minitel123", placeholder: "8 caractères minimum", secret: true },
+  ] },
   { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
     { key: "port", label: "port", type: "number", defaultValue: num(1883), min: 1, max: 65535, compact: true },
@@ -2449,6 +2453,22 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "wifi-hotspot": {
+        const ssid = textValue(values.ssid, "").trim();
+        const password = textValue(values.password, "");
+        if (!ssid) {
+          pushLine(lines, indent, "// Hotspot Wi-Fi ignoré : le nom du réseau est vide.");
+          break;
+        }
+        if (password && password.length < 8) {
+          pushLine(lines, indent, "// Hotspot Wi-Fi ignoré : le mot de passe doit contenir au moins 8 caractères.");
+          break;
+        }
+        pushLine(lines, indent, password
+          ? "WiFi.softAP(" + cppString(ssid) + ", " + cppString(password) + ");"
+          : "WiFi.softAP(" + cppString(ssid) + ");");
+        break;
+      }
       case "mqtt-connect": {
         const host = textValue(values.host, "").trim();
         const clientId = textValue(values.clientId, "minitel-esp32").trim() || "minitel-esp32";
@@ -2625,7 +2645,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
-  const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect");
+  const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
@@ -3162,6 +3182,16 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "wifi-connect": {
         const ssid = textValue(values.ssid, "");
         state.messages.push("Simulation : réseau du PC" + (ssid ? " · SSID ESP32 : " + ssid : ""));
+        break;
+      }
+      case "wifi-hotspot": {
+        const ssid = textValue(values.ssid, "").trim();
+        const password = textValue(values.password, "");
+        state.messages.push(!ssid
+          ? "Hotspot Wi-Fi : nom du réseau manquant"
+          : password && password.length < 8
+            ? "Hotspot Wi-Fi : mot de passe trop court (8 caractères minimum)"
+            : "Hotspot Wi-Fi créé · " + ssid + " · " + (password ? "sécurisé" : "ouvert") + " · 192.168.4.1");
         break;
       }
       case "mqtt-connect": {

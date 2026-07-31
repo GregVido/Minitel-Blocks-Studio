@@ -129,6 +129,8 @@ La réponse GET contient un message, un nombre et les paramètres query reçus. 
 
 Pour utiliser MQTT, placez d'abord **se connecter au Wi-Fi**, puis **se connecter au broker MQTT**. Indiquez l'adresse du broker, son port et, si nécessaire, les identifiants. Le bloc **publier un message MQTT** envoie un texte sur le topic choisi ; vous pouvez saisir ce texte directement ou glisser une variable Texte dans l'emplacement du message. L'option de conservation demande au broker de mémoriser le dernier message. Ajoutez **s'abonner au topic MQTT** pour écouter un topic, puis utilisez le bloc de départ **quand un message MQTT est reçu** pour ranger son contenu dans une variable Texte et déclencher les blocs placés dessous. La bibliothèque MQTT est incluse automatiquement : aucune installation supplémentaire n'est demandée.
 
+Le bloc **créer un hotspot Wi-Fi** transforme l'ESP32 en point d'accès. Choisissez le nom du réseau et un mot de passe d'au moins 8 caractères, ou laissez le mot de passe vide pour créer un réseau ouvert. Par défaut, les appareils connectés peuvent joindre l'ESP32 à l'adresse `192.168.4.1`.
+
 Dans **Paramètres > Serveur de test**, le démarrage automatique peut être désactivé et le port peut être modifié. Les nouveaux blocs réseau utilisent alors automatiquement les adresses correspondant à ce port.
 
 Ces adresses `localhost` servent au simulateur sur l'ordinateur. Après téléversement, l'ESP32 doit utiliser l'adresse d'un serveur accessible depuis son réseau Wi-Fi.

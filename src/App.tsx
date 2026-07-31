@@ -9,6 +9,7 @@ import Download from "lucide-react/dist/esm/icons/download.js";
 import Eye from "lucide-react/dist/esm/icons/eye.js";
 import FileCode2 from "lucide-react/dist/esm/icons/file-code-2.js";
 import FileDown from "lucide-react/dist/esm/icons/file-down.js";
+import FolderOpen from "lucide-react/dist/esm/icons/folder-open.js";
 import House from "lucide-react/dist/esm/icons/house.js";
 import GitBranch from "lucide-react/dist/esm/icons/git-branch.js";
 import GripVertical from "lucide-react/dist/esm/icons/grip-vertical.js";
@@ -60,6 +61,12 @@ import {
   type SceneElement,
   type SceneImageElement,
 } from "./screen-designer";
+import {
+  FileEditor,
+  normalizeProjectAssets,
+  type ProjectAsset,
+  type ProjectAssetChangeOptions,
+} from "./file-editor";
 import ProjectHub, { type NewProjectSettings } from "./project-hub";
 
 type BlockKind = "event" | "action" | "control" | "value";
@@ -67,7 +74,7 @@ type InputType = "text" | "text-value" | "number" | "select" | "color" | "boolea
 type ExprType = "number" | "boolean" | "text";
 type VariableValueType = "number" | "text";
 type RightTab = "preview" | "code" | "upload";
-type WorkspaceMode = "blocks" | "designer";
+type WorkspaceMode = "blocks" | "designer" | "files";
 type AppTheme = "light" | "dark";
 
 type SelectOption = {
@@ -245,6 +252,8 @@ type ProjectSnapshot = {
   screenConfig: MinitelScreenConfig;
   screens: MinitelScene[];
   activeScreenId: string;
+  files: ProjectAsset[];
+  activeFileId: string;
   workspaceMode: WorkspaceMode;
 };
 
@@ -255,7 +264,7 @@ type ProjectMetadata = {
 
 type ProjectFile = {
   format: "minitel-blocks-studio";
-  version: 2;
+  version: 3;
   savedAt: string;
   board: string;
   metadata: ProjectMetadata;
@@ -419,7 +428,7 @@ const DELETE_ANIMATION_MS = 260;
 const BLOCK_MOTION_MS = 430;
 const HISTORY_LIMIT = 80;
 const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
-const PROJECT_FILE_VERSION = 2;
+const PROJECT_FILE_VERSION = 3;
 const APP_THEME_STORAGE_KEY = "minitel-blocks-theme";
 const APP_AUTO_SAVE_STORAGE_KEY = "minitel-blocks-auto-save";
 const APP_AUTO_UPDATE_STORAGE_KEY = "minitel-blocks-auto-update";
@@ -1474,7 +1483,7 @@ function validProjectDate(value: unknown, fallback: string) {
 }
 
 function normalizeWorkspaceMode(value: unknown): WorkspaceMode {
-  return value === "designer" ? "designer" : "blocks";
+  return value === "designer" || value === "files" ? value : "blocks";
 }
 
 function serializeProjectFile(snapshot: ProjectSnapshot, board: string, metadata: ProjectMetadata) {
@@ -1518,12 +1527,17 @@ function parseProjectFile(contents: string): ParsedProjectFile {
   stacks = repairScreenReferencesInStacks(stacks, screens);
   const requestedActiveScreenId = typeof projectSource.activeScreenId === "string" ? projectSource.activeScreenId : "";
   const activeScreenId = screens.some((screen) => screen.id === requestedActiveScreenId) ? requestedActiveScreenId : screens[0].id;
+  const files = normalizeProjectAssets(projectSource.files);
+  const requestedActiveFileId = typeof projectSource.activeFileId === "string" ? projectSource.activeFileId : "";
+  const activeFileId = files.some((asset) => asset.id === requestedActiveFileId) ? requestedActiveFileId : files[0]?.id ?? "";
   const project: ProjectSnapshot = {
     stacks,
     variables: normalizeImportedVariables(projectSource.variables),
     screenConfig,
     screens,
     activeScreenId,
+    files,
+    activeFileId,
     workspaceMode: normalizeWorkspaceMode(projectSource.workspaceMode),
   };
   const board = typeof document.board === "string" && supportedProjectBoards.has(document.board) ? document.board : "esp32dev";
@@ -1707,7 +1721,7 @@ function defaultProjectVariables() {
 
 function createScreenState(name = "Écran principal", elements: SceneElement[] = [], workspaceMode: WorkspaceMode = "blocks") {
   const screen = createMinitelScene(name, elements);
-  return { screens: [screen], activeScreenId: screen.id, workspaceMode };
+  return { screens: [screen], activeScreenId: screen.id, files: [] as ProjectAsset[], activeFileId: "", workspaceMode };
 }
 
 const projectExamples: ProjectExample[] = [
@@ -1762,6 +1776,8 @@ const projectExamples: ProjectExample[] = [
         screenConfig: config,
         screens: [screen],
         activeScreenId: screen.id,
+        files: [],
+        activeFileId: "",
         workspaceMode: "designer",
       };
     },
@@ -1802,6 +1818,8 @@ function createNewProjectSnapshot(settings: NewProjectSettings): ProjectSnapshot
     screenConfig,
     screens: [screen],
     activeScreenId: screen.id,
+    files: [],
+    activeFileId: "",
     workspaceMode: "blocks",
   };
 }
@@ -5068,6 +5086,8 @@ function App() {
   const [screenConfig, setScreenConfig] = useState<MinitelScreenConfig>(() => initialProject.screenConfig);
   const [screens, setScreens] = useState<MinitelScene[]>(() => initialProject.screens);
   const [activeScreenId, setActiveScreenId] = useState(() => initialProject.activeScreenId);
+  const [projectFiles, setProjectFiles] = useState<ProjectAsset[]>(() => initialProject.files);
+  const [activeFileId, setActiveFileId] = useState(() => initialProject.activeFileId);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => initialProject.workspaceMode);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const [selectedStackId, setSelectedStackId] = useState<string>("");
@@ -5159,7 +5179,7 @@ function App() {
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
   }), [currentProject?.createdAt, currentProject?.name]);
-  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode }, board, currentMetadata) : "", [activeScreenId, board, currentMetadata, currentProject, screenConfig, screens, stacks, variables, workspaceMode]);
+  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata) : "", [activeFileId, activeScreenId, board, currentMetadata, currentProject, projectFiles, screenConfig, screens, stacks, variables, workspaceMode]);
   const projectDirty = Boolean(currentProject && currentSignature !== lastSavedSignatureRef.current);
 
   useEffect(() => {
@@ -5459,7 +5479,7 @@ function App() {
   }
 
   function pushHistory() {
-    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode });
+    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
     setHistory((current) => {
       const last = current.past[current.past.length - 1];
       if (last && JSON.stringify(last) === JSON.stringify(snapshot)) {
@@ -5512,6 +5532,8 @@ function App() {
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
+    setProjectFiles(next.files);
+    setActiveFileId(next.activeFileId);
     setWorkspaceMode(next.workspaceMode);
     setSelectedStackId((current) => (next.stacks.some((stack) => stack.id === current) ? current : next.stacks[0]?.id || ""));
     setSimRunning(false);
@@ -5524,7 +5546,7 @@ function App() {
   function undo() {
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
     setHistory({ past: history.past.slice(0, -1), future: [now, ...history.future].slice(0, HISTORY_LIMIT) });
     restoreSnapshot(previous);
     flashNotice("Retour en arrière");
@@ -5533,7 +5555,7 @@ function App() {
   function redo() {
     if (history.future.length === 0) return;
     const next = history.future[0];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode });
+    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
     setHistory({ past: [...history.past.slice(-HISTORY_LIMIT + 1), now], future: history.future.slice(1) });
     restoreSnapshot(next);
     flashNotice("Action rétablie");
@@ -5742,7 +5764,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeScreenId, appView, autoSaveEnabled, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables, workspaceMode]);
+  }, [activeFileId, activeScreenId, appView, autoSaveEnabled, board, currentProject, examplesOpen, history, libraryBusy, projectDirty, projectFiles, projects, rightTab, screenConfig, screens, selectedProjectId, settingsOpen, stacks, variables, workspaceMode]);
 
   useEffect(() => {
     const handleDragOver = (event: globalThis.DragEvent) => moveDragPreview(event);
@@ -6147,6 +6169,8 @@ function App() {
     setScreenConfig(createDefaultScreenConfig());
     setScreens([nextScreen]);
     setActiveScreenId(nextScreen.id);
+    setProjectFiles([]);
+    setActiveFileId("");
     setWorkspaceMode("blocks");
     setSelectedStackId(nextStacks[0].id);
     setSimRunning(false);
@@ -6167,6 +6191,8 @@ function App() {
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
+    setProjectFiles(next.files);
+    setActiveFileId(next.activeFileId);
     setWorkspaceMode(next.workspaceMode);
     setSelectedStackId(next.stacks[0]?.id ?? "");
     setSimRunning(false);
@@ -6196,6 +6222,16 @@ function App() {
 
   function changeActiveScreen(screenId: string) {
     setActiveScreenId(screenId);
+  }
+
+  function changeProjectFiles(next: ProjectAsset[], options: ProjectAssetChangeOptions = {}) {
+    if (options.captureHistory !== false) pushHistory();
+    setProjectFiles(next);
+    setActiveFileId((current) => next.some((asset) => asset.id === current) ? current : next[0]?.id ?? "");
+  }
+
+  function changeActiveFile(fileId: string) {
+    setActiveFileId(fileId);
   }
 
   function addVariable() {
@@ -6315,6 +6351,8 @@ function App() {
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
+    setProjectFiles(next.files);
+    setActiveFileId(next.activeFileId);
     setBoard(parsed.board);
     setCurrentProject(summary);
     setSelectedProjectId(summary.id);
@@ -6409,7 +6447,7 @@ function App() {
   function saveProject({ quiet = false }: { quiet?: boolean } = {}): Promise<boolean> {
     if (!currentProject) return Promise.resolve(false);
     if (saveInFlightRef.current) return saveInFlightRef.current;
-    const snapshot = { stacks, variables, screenConfig, screens, activeScreenId, workspaceMode };
+    const snapshot = { stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode };
     const metadata = { name: currentProject.name, createdAt: currentProject.createdAt };
     const operation = (async () => {
       setLibraryBusy(true);
@@ -6450,7 +6488,7 @@ function App() {
   async function exportProjectFile() {
     if (!currentProject) return;
     const suggestedName = cleanProjectName(currentProject.name).replace(/\s+/g, "-") + ".mbs";
-    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode }, board, currentMetadata);
+    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata);
     try {
       if (window.minitelStudio?.exportProject) {
         const result = await window.minitelStudio.exportProject({ suggestedName, contents });
@@ -6650,14 +6688,14 @@ function App() {
     }
     const handleBeforeUnload = () => {
       if (!autoSaveEnabled || appView !== "studio" || !currentProject || !projectDirty) return;
-      const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, workspaceMode }, board, currentMetadata);
+      const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata);
       const records = readBrowserProjectRecords().filter((record) => record.id !== currentProject.id);
       records.push({ id: currentProject.id, contents, modifiedAt: new Date().toISOString() });
       writeBrowserProjectRecords(records);
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-  }, [activeScreenId, appView, autoSaveEnabled, board, currentMetadata, currentProject, currentSignature, projectDirty, screenConfig, screens, stacks, variables, workspaceMode]);
+  }, [activeFileId, activeScreenId, appView, autoSaveEnabled, board, currentMetadata, currentProject, currentSignature, projectDirty, projectFiles, screenConfig, screens, stacks, variables, workspaceMode]);
 
   const updateVisible = Boolean(appUpdate && !["idle", "disabled", "up-to-date"].includes(appUpdate.status));
   const updateCanAct = appUpdate?.status === "ready" || appUpdate?.status === "error";
@@ -6669,6 +6707,12 @@ function App() {
     appUpdate.status === "installing" ? "Installation..." :
     appUpdate.status === "error" ? "Réessayer" :
     appUpdate.message;
+  const workspaceTitle = workspaceMode === "blocks" ? "Programme" : workspaceMode === "designer" ? "Éditeur d'écran" : "Éditeur de fichiers";
+  const workspaceSummary = workspaceMode === "blocks"
+    ? stacks.length + " pile" + (stacks.length > 1 ? "s" : "") + " active" + (stacks.length > 1 ? "s" : "")
+    : workspaceMode === "designer"
+      ? screens.length + " écran" + (screens.length > 1 ? "s" : "") + " · " + sceneElements.length + " élément" + (sceneElements.length > 1 ? "s" : "")
+      : projectFiles.length + " fichier" + (projectFiles.length > 1 ? "s" : "") + " dans le projet";
 
   if (appView === "projects") {
     return (
@@ -6760,14 +6804,15 @@ function App() {
         <section className="workspace-panel" aria-label="Espace de construction">
           <div className="workspace-header">
             <div className="workspace-heading">
-              <div className="section-title"><Radio size={18} /><span>{workspaceMode === "blocks" ? "Programme" : "Éditeur d'écran"}</span></div>
-              <p>{workspaceMode === "blocks" ? stacks.length + " pile" + (stacks.length > 1 ? "s" : "") + " active" + (stacks.length > 1 ? "s" : "") : screens.length + " écran" + (screens.length > 1 ? "s" : "") + " · " + sceneElements.length + " élément" + (sceneElements.length > 1 ? "s" : "")}</p>
+              <div className="section-title">{workspaceMode === "files" ? <FolderOpen size={18} /> : <Radio size={18} />}<span>{workspaceTitle}</span></div>
+              <p>{workspaceSummary}</p>
             </div>
             <div className="workspace-mode-tabs" aria-label="Mode d'édition">
               <button type="button" className={workspaceMode === "blocks" ? "active" : ""} onClick={() => setWorkspaceMode("blocks")}><ListTree size={16} /><span>Blocs</span></button>
               <button type="button" className={workspaceMode === "designer" ? "active" : ""} onClick={() => setWorkspaceMode("designer")}><Monitor size={16} /><span>Écran</span></button>
+              <button type="button" className={workspaceMode === "files" ? "active" : ""} onClick={() => setWorkspaceMode("files")}><FolderOpen size={16} /><span>Fichiers</span></button>
             </div>
-            <div className="workspace-chip"><Settings2 size={15} /><span>{screenConfig.columns} × {screenConfig.rows}</span></div>
+            <div className="workspace-chip">{workspaceMode === "files" ? <FolderOpen size={15} /> : <Settings2 size={15} />}<span>{workspaceMode === "files" ? projectFiles.length + " fichier" + (projectFiles.length > 1 ? "s" : "") : screenConfig.columns + " × " + screenConfig.rows}</span></div>
           </div>
 
           {workspaceMode === "blocks" ? (
@@ -6780,8 +6825,10 @@ function App() {
                 </section>
               ))}
             </div>
-          ) : (
+          ) : workspaceMode === "designer" ? (
             <ScreenDesigner config={screenConfig} screens={screens} activeScreenId={activeScreen?.id ?? ""} onConfigChange={changeScreenConfig} onScreensChange={changeScreens} onActiveScreenChange={changeActiveScreen} onNotice={flashNotice} />
+          ) : (
+            <FileEditor files={projectFiles} activeFileId={activeFileId} onFilesChange={changeProjectFiles} onActiveFileChange={changeActiveFile} onNotice={flashNotice} />
           )}
         </section>
 

@@ -33,7 +33,7 @@ Si une mise à jour existe, elle se télécharge en arrière-plan sans interromp
 L'application est organisée en trois zones :
 
 - à gauche, les blocs disponibles, rangés par catégorie ;
-- au centre, le programme en blocs ou l'éditeur visuel de l'écran ;
+- au centre, le programme en blocs, l'éditeur visuel de l'écran ou les fichiers du projet ;
 - à droite, le Minitel simulé, le programme généré et l'envoi vers l'ESP32.
 
 Le bouton **Exemples** propose plusieurs projets prêts à modifier : découverte, menu interactif, compteur animé, clavier sonore et affiche visuelle.
@@ -59,7 +59,7 @@ Le bloc **détecter la vitesse** peut faire ce choix automatiquement. Il interro
 
 ## Sauvegarder et retrouver un projet
 
-Le bouton **Sauvegarder** crée un fichier de projet `.mbs`. Il conserve les blocs et leur ordre, les variables, le modèle de Minitel, tous les écrans avec leurs noms et leurs éléments, ainsi que le modèle d'ESP32 choisi.
+Le bouton **Sauvegarder** conserve les blocs et leur ordre, les variables, le modèle de Minitel, tous les écrans avec leurs noms et leurs éléments, les fichiers ajoutés au projet, ainsi que le modèle d'ESP32 choisi.
 
 Le bouton **Ouvrir** restaure ce fichier dans l'application. Le projet précédent reste accessible avec **Annuler** juste après l'ouverture d'un autre projet.
 
@@ -80,6 +80,16 @@ Sur l'écran sélectionné, tu peux :
 - importer une image pour la transformer en mosaïque Minitel.
 
 Pour afficher une page, ajoute le bloc **dessiner l'écran** depuis la catégorie **Écran**, puis choisis son nom dans la liste. Ce bloc peut être placé au démarrage, après l'appui sur une touche ou dans une condition pour passer facilement d'un écran à un autre.
+
+## Organiser les fichiers du projet
+
+Passe à **Fichiers** dans la barre située au-dessus de l'espace central.
+
+Tu peux créer un fichier texte, JSON, HTML, CSS ou JavaScript, mais aussi importer plusieurs fichiers depuis ton ordinateur ou les déposer directement dans la fenêtre. La recherche retrouve rapidement un nom ou un dossier.
+
+Les fichiers texte se modifient directement dans l'application avec leurs numéros de ligne. Pour un fichier JSON, l'application vérifie le contenu et peut le remettre en forme. Les images, sons, vidéos et documents PDF disposent d'un aperçu adapté.
+
+Chaque fichier peut être renommé, rangé avec un chemin comme `images/logo.png`, dupliqué, remplacé, téléchargé ou supprimé. Tous les fichiers restent inclus dans le projet lors de la sauvegarde et de l'export en `.mbs`.
 
 ## Importer une image
 

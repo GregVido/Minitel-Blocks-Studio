@@ -5,6 +5,7 @@ import "./styles.css";
 import "./polish.css";
 import "./project-hub.css";
 import "./theme.css";
+import "./file-editor.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

@@ -64,10 +64,18 @@ import {
 import {
   FileEditor,
   normalizeProjectAssets,
+  projectAssetBytes,
   type ProjectAsset,
   type ProjectAssetChangeOptions,
 } from "./file-editor";
 import ProjectHub, { type NewProjectSettings } from "./project-hub";
+import {
+  DEFAULT_WEB_SERVER_PORT,
+  WebServerConfigDialog,
+  parseWebServerRoutes,
+  serializeWebServerRoutes,
+  type WebServerAssetRoute,
+} from "./web-server-config";
 
 type BlockKind = "event" | "action" | "control" | "value";
 type InputType = "text" | "text-value" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "query";
@@ -201,6 +209,7 @@ type BlockInput = {
   placeholder?: string;
   secret?: boolean;
   variableType?: VariableValueType | "any";
+  hidden?: boolean;
 };
 
 type SlotDefinition = {
@@ -413,6 +422,8 @@ type CodeContext = {
   keyVariable?: string;
   screens?: MinitelScene[];
   colorEnabled?: boolean;
+  projectFiles?: ProjectAsset[];
+  webAssetSymbols?: Record<string, string>;
 };
 
 type ProjectExample = {
@@ -1089,6 +1100,10 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "nom du hotspot", type: "text", defaultValue: "Minitel-ESP32", placeholder: "Minitel-ESP32" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "minitel123", placeholder: "8 caractères minimum", secret: true },
   ] },
+  { id: "web-server-start", title: "démarrer un serveur web", help: "Démarre un serveur HTTP sur l'ESP32 et publie les fichiers choisis dans les options du bloc.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+    { key: "port", label: "port", type: "number", defaultValue: num(DEFAULT_WEB_SERVER_PORT), min: 1, max: 65535, hidden: true },
+    { key: "assets", label: "fichiers", type: "text", defaultValue: "[]", hidden: true },
+  ] },
   { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
     { key: "port", label: "port", type: "number", defaultValue: num(1883), min: 1, max: 65535, compact: true },
@@ -1304,7 +1319,7 @@ function normalizeImportedValues(definition: BlockDefinition, value: unknown): V
       return;
     }
     if (input.type === "text") {
-      if (["string", "number", "boolean"].includes(typeof importedValue)) values[input.key] = String(importedValue).slice(0, 1024);
+      if (["string", "number", "boolean"].includes(typeof importedValue)) values[input.key] = String(importedValue).slice(0, input.hidden ? 262144 : 1024);
       return;
     }
     if (input.type === "text-value") {
@@ -1470,6 +1485,39 @@ function repairScreenReferencesInStacks(stacks: ScriptStack[], screens: MinitelS
   return stacks.map((stack) => ({ ...stack, blocks: repairScreenReferencesInBlocks(stack.blocks, screens) }));
 }
 
+function repairWebServerFileReferencesInBlocks(blocks: ProgramBlock[], files: ProjectAsset[]): ProgramBlock[] {
+  const validFileIds = new Set(files.map((asset) => asset.id));
+  let changed = false;
+  const next = blocks.map((block) => {
+    const children = block.children ? repairWebServerFileReferencesInBlocks(block.children, files) : block.children;
+    const elseChildren = block.elseChildren ? repairWebServerFileReferencesInBlocks(block.elseChildren, files) : block.elseChildren;
+    let values = block.values;
+    if (block.definitionId === "web-server-start") {
+      const routes = parseWebServerRoutes(block.values.assets);
+      const availableRoutes = routes.filter((route) => validFileIds.has(route.fileId));
+      const serialized = serializeWebServerRoutes(availableRoutes);
+      if (serialized !== textValue(block.values.assets, "[]")) values = { ...block.values, assets: serialized };
+    }
+    if (values !== block.values || children !== block.children || elseChildren !== block.elseChildren) {
+      changed = true;
+      return { ...block, values, children, elseChildren };
+    }
+    return block;
+  });
+  return changed ? next : blocks;
+}
+
+function repairWebServerFileReferencesInStacks(stacks: ScriptStack[], files: ProjectAsset[]) {
+  let changed = false;
+  const next = stacks.map((stack) => {
+    const blocks = repairWebServerFileReferencesInBlocks(stack.blocks, files);
+    if (blocks === stack.blocks) return stack;
+    changed = true;
+    return { ...stack, blocks };
+  });
+  return changed ? next : stacks;
+}
+
 function cleanProjectName(value: unknown, fallback = "Projet Minitel") {
   if (typeof value !== "string") return fallback;
   const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
@@ -1528,6 +1576,7 @@ function parseProjectFile(contents: string): ParsedProjectFile {
   const requestedActiveScreenId = typeof projectSource.activeScreenId === "string" ? projectSource.activeScreenId : "";
   const activeScreenId = screens.some((screen) => screen.id === requestedActiveScreenId) ? requestedActiveScreenId : screens[0].id;
   const files = normalizeProjectAssets(projectSource.files);
+  stacks = repairWebServerFileReferencesInStacks(stacks, files);
   const requestedActiveFileId = typeof projectSource.activeFileId === "string" ? projectSource.activeFileId : "";
   const activeFileId = files.some((asset) => asset.id === requestedActiveFileId) ? requestedActiveFileId : files[0]?.id ?? "";
   const project: ProjectSnapshot = {
@@ -2487,6 +2536,33 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
           : "WiFi.softAP(" + cppString(ssid) + ");");
         break;
       }
+      case "web-server-start": {
+        const port = clamp(Math.round(exprPreviewNumber(values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535);
+        const files = context?.projectFiles ?? [];
+        const symbols = context?.webAssetSymbols ?? {};
+        const seenPaths = new Set<string>();
+        const routes = parseWebServerRoutes(values.assets).flatMap((route) => {
+          const asset = files.find((item) => item.id === route.fileId);
+          const symbol = symbols[route.fileId];
+          if (!asset || !symbol || seenPaths.has(route.path)) return [];
+          seenPaths.add(route.path);
+          return [{ route, asset, symbol }];
+        });
+        pushLine(lines, indent, "if (mbsWebServer == nullptr) {");
+        pushLine(lines, indent + 2, "mbsWebServer = new WebServer(" + port + ");");
+        routes.forEach(({ route, asset, symbol }) => {
+          const mimeType = asset.mimeType.trim().slice(0, 120) || "application/octet-stream";
+          pushLine(lines, indent + 2, "mbsWebServer->on(" + cppString(route.path) + ", HTTP_GET, []() {");
+          pushLine(lines, indent + 4, "mbsWebServer->send_P(200, " + cppString(mimeType) + ", (PGM_P)" + symbol + ", " + symbol + "Length);");
+          pushLine(lines, indent + 2, "});");
+        });
+        pushLine(lines, indent + 2, "mbsWebServer->onNotFound([]() {");
+        pushLine(lines, indent + 4, "mbsWebServer->send(404, \"text/plain; charset=utf-8\", \"Fichier introuvable\");");
+        pushLine(lines, indent + 2, "});");
+        pushLine(lines, indent + 2, "mbsWebServer->begin();");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "mqtt-connect": {
         const host = textValue(values.host, "").trim();
         const clientId = textValue(values.clientId, "minitel-esp32").trim() || "minitel-esp32";
@@ -2650,7 +2726,33 @@ function appendSceneCode(lines: string[], elements: SceneElement[], indent: numb
   });
 }
 
-function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], screenConfig: MinitelScreenConfig, screens: MinitelScene[]) {
+function collectWebServerAssetIds(stacks: ScriptStack[]) {
+  const ids = new Set<string>();
+  stacks.forEach((stack) => walkBlocks(stack.blocks, (block) => {
+    if (block.definitionId !== "web-server-start") return;
+    parseWebServerRoutes(block.values.assets).forEach((route) => ids.add(route.fileId));
+  }));
+  return ids;
+}
+
+function appendEmbeddedWebAsset(lines: string[], asset: ProjectAsset, symbol: string) {
+  const bytes = projectAssetBytes(asset);
+  const safeName = asset.name.replace(/[\r\n]+/g, " ").replace(/[^\x20-\x7e]/g, "?");
+  lines.push("", "// Fichier web : " + safeName, "static const uint8_t " + symbol + "[] PROGMEM = {");
+  if (bytes.length === 0) {
+    lines.push("  0x00,");
+  } else {
+    for (let offset = 0; offset < bytes.length; offset += 16) {
+      const row = Array.from(bytes.slice(offset, offset + 16))
+        .map((byte) => "0x" + byte.toString(16).padStart(2, "0"))
+        .join(", ");
+      lines.push("  " + row + ",");
+    }
+  }
+  lines.push("};", "static const size_t " + symbol + "Length = " + bytes.length + ";");
+}
+
+function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], projectFiles: ProjectAsset[]) {
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
@@ -2661,24 +2763,35 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
+  const usesWebServer = projectUsesBlock(stacks, "web-server-start");
+  const webAssetIds = collectWebServerAssetIds(stacks);
+  const embeddedWebAssets = projectFiles.filter((asset) => webAssetIds.has(asset.id));
+  const webAssetSymbols = Object.fromEntries(embeddedWebAssets.map((asset, index) => [asset.id, "mbsWebAsset_" + index]));
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
-  const usesWifi = usesHttp || usesMqtt || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
+  const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
+  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols };
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
     ...(usesHttp ? ["#include <HTTPClient.h>"] : []),
+    ...(usesWebServer ? ["#include <WebServer.h>"] : []),
     ...(usesMqtt ? ['#include "PubSubClient.h"'] : []),
     ...(usesJson ? ['#include "cJSON.h"'] : []),
     "#include <MinitelESP32.h>",
     "",
     "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows,
     "MinitelESP32 minitel(Serial2, 16, 17, 1200);",
+    ...(usesWebServer ? ["WebServer *mbsWebServer = nullptr;"] : []),
     ...(usesMqtt ? [
       "WiFiClient mbsMqttNetworkClient;",
       "PubSubClient mbsMqttClient(mbsMqttNetworkClient);",
     ] : []),
   ];
+
+  if (usesWebServer) {
+    embeddedWebAssets.forEach((asset) => appendEmbeddedWebAsset(lines, asset, webAssetSymbols[asset.id]));
+  }
 
   lines.push(
     "",
@@ -2953,7 +3066,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       const target = textValue(stack.event.values.target, "").trim();
       pushLine(lines, 2, topic ? "if (mbsMqttTopic == " + cppString(topic) + ") {" : "{");
       if (target) pushLine(lines, 4, sanitizeIdentifier(target) + " = mbsMqttMessage;");
-      appendBlockCode(lines, stack.blocks, 4, variables, { screens, colorEnabled: screenConfig.colorEnabled });
+      appendBlockCode(lines, stack.blocks, 4, variables, codeContext);
       pushLine(lines, 2, "}");
     });
     lines.push("}");
@@ -2961,9 +3074,10 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
 
   lines.push("", "void setup() {", "  minitel.begin();", "  minitel.resetDisplay();");
   if (mqttMessageStacks.length > 0) lines.push("  mbsMqttClient.setCallback(mbsHandleMqttMessage);");
-  setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens, colorEnabled: screenConfig.colorEnabled }));
+  setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, codeContext));
   lines.push("}", "", "void loop() {");
   if (usesMqtt) lines.push("  mbsMqttClient.loop();");
+  if (usesWebServer) lines.push("  if (mbsWebServer != nullptr) mbsWebServer->handleClient();");
 
   if (keyStacks.length > 0) {
     lines.push("  MinitelESP32::Key key = minitel.readKey();");
@@ -2973,12 +3087,12 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       } else {
         lines.push("  if (" + keyCondition(stack.event.values.key) + ") {");
       }
-      appendBlockCode(lines, stack.blocks, 4, variables, { keyVariable: "key", screens, colorEnabled: screenConfig.colorEnabled });
+      appendBlockCode(lines, stack.blocks, 4, variables, { ...codeContext, keyVariable: "key" });
       lines.push("  }");
     });
   }
 
-  loopStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, { screens, colorEnabled: screenConfig.colorEnabled }));
+  loopStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, codeContext));
   lines.push("  delay(10);", "}");
   return lines.join("\n");
 }
@@ -3210,6 +3324,12 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
           : password && password.length < 8
             ? "Hotspot Wi-Fi : mot de passe trop court (8 caractères minimum)"
             : "Hotspot Wi-Fi créé · " + ssid + " · " + (password ? "sécurisé" : "ouvert") + " · 192.168.4.1");
+        break;
+      }
+      case "web-server-start": {
+        const port = clamp(Math.round(exprPreviewNumber(values.port, state.variables, DEFAULT_WEB_SERVER_PORT)), 1, 65535);
+        const routeCount = parseWebServerRoutes(values.assets).length;
+        state.messages.push("Serveur web simulé · port " + port + " · " + routeCount + " fichier" + (routeCount > 1 ? "s" : ""));
         break;
       }
       case "mqtt-connect": {
@@ -4525,6 +4645,7 @@ function PaletteBlock({
   onDragEnd: () => void;
 }) {
   const style = { "--block-color": definition.color } as BlockStyle;
+  const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
   const shape = definition.kind === "event"
     ? "event-hat"
     : definition.kind === "control"
@@ -4535,7 +4656,7 @@ function PaletteBlock({
   const expressionPreview = definition.output ?? null;
   return (
     <button
-      className={"palette-block " + shape + (definition.inputs?.length ? " has-inputs" : "") + (isDragging ? " dragging" : "")}
+      className={"palette-block " + shape + (visibleInputs.length ? " has-inputs" : "") + (isDragging ? " dragging" : "")}
       style={style}
       draggable={false}
       onPointerDown={(event) => onPalettePointerDown(definition, event)}
@@ -4551,9 +4672,9 @@ function PaletteBlock({
       aria-label={definition.title}
     >
       {expressionPreview ? <PaletteExpressionPreview expression={expressionPreview} /> : <span className="palette-block-title">{definition.title}</span>}
-      {definition.inputs?.length ? (
+      {visibleInputs.length ? (
         <span className="palette-block-inputs">
-          {definition.inputs.slice(0, 2).map((input) => (
+          {visibleInputs.slice(0, 2).map((input) => (
             <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : input.secret ? "••••••" : input.placeholder || expressionLabel(input.defaultValue)}</span>
           ))}
         </span>
@@ -4614,6 +4735,7 @@ function BlockListView({
   motionIds,
   draggingBlockId,
   activeDropKey,
+  onConfigure,
   onDropBranch,
   onValueChange,
   onDelete,
@@ -4635,6 +4757,7 @@ function BlockListView({
   motionIds: Record<string, MotionKind>;
   draggingBlockId: string;
   activeDropKey: string;
+  onConfigure: (stackId: string, blockId: string) => void;
   onDropBranch: (payload: DragPayload, location: DropLocation) => void;
   onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
   onDelete: (stackId: string, blockId: string) => void;
@@ -4665,6 +4788,7 @@ function BlockListView({
             motionIds={motionIds}
             draggingBlockId={draggingBlockId}
             activeDropKey={activeDropKey}
+            onConfigure={onConfigure}
             onDropBranch={onDropBranch}
             onValueChange={onValueChange}
             onDelete={onDelete}
@@ -4697,6 +4821,7 @@ function ProgramBlockView({
   motionIds,
   draggingBlockId,
   activeDropKey,
+  onConfigure,
   onDropBranch,
   onValueChange,
   onDelete,
@@ -4721,6 +4846,7 @@ function ProgramBlockView({
   motionIds: Record<string, MotionKind>;
   draggingBlockId: string;
   activeDropKey: string;
+  onConfigure: (stackId: string, blockId: string) => void;
   onDropBranch: (payload: DragPayload, location: DropLocation) => void;
   onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
   onDelete: (stackId: string, blockId: string) => void;
@@ -4734,6 +4860,12 @@ function ProgramBlockView({
 }) {
   const definition = blockById[block.definitionId];
   const style = { "--block-color": definition.color } as BlockStyle;
+  const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
+  const isWebServer = definition.id === "web-server-start";
+  const webServerRoutes = isWebServer ? parseWebServerRoutes(block.values.assets) : [];
+  const webServerPort = isWebServer
+    ? clamp(Math.round(exprPreviewNumber(block.values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535)
+    : DEFAULT_WEB_SERVER_PORT;
   const isControl = definition.kind === "control";
   const [dropHint, setDropHint] = useState<"before" | "after" | null>(null);
   const activeBeforeKey = dropLocationKey({ stackId, ownerId, slot, index });
@@ -4803,15 +4935,27 @@ function ProgramBlockView({
         <GripVertical className="drag-grip" size={18} aria-hidden="true" />
         <div className="program-block-main">
           <span className="block-title">{definition.title}</span>
-          {definition.inputs && definition.inputs.length > 0 ? (
+          {visibleInputs.length > 0 ? (
             <div className="block-inputs">
-              {definition.inputs.map((input) => (
+              {visibleInputs.map((input) => (
                 <InputControl key={input.key} input={input} variables={variables} screens={screens} value={block.values[input.key]} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: input.key }} onChange={(value) => onValueChange(stackId, block.id, input.key, value)} />
               ))}
             </div>
           ) : null}
+          {isWebServer ? (
+            <div className="web-server-block-summary">
+              <Server size={14} />
+              <span>port {webServerPort}</span>
+              <span>· {webServerRoutes.length} fichier{webServerRoutes.length > 1 ? "s" : ""}</span>
+            </div>
+          ) : null}
         </div>
-        <div className="block-actions" onMouseDown={(event) => event.stopPropagation()}>
+        <div className={"block-actions" + (isWebServer ? " has-options" : "")} onMouseDown={(event) => event.stopPropagation()}>
+          {isWebServer ? (
+            <button type="button" className="block-options-button" onClick={() => onConfigure(stackId, block.id)} title="Configurer le serveur web">
+              <Settings2 size={15} />
+            </button>
+          ) : null}
           <button type="button" onClick={() => onMove(stackId, block.id, -1)} disabled={isFirst} title="Monter">
             <ChevronUp size={15} />
           </button>
@@ -4841,6 +4985,7 @@ function ProgramBlockView({
             motionIds={motionIds}
             draggingBlockId={draggingBlockId}
             activeDropKey={activeDropKey}
+            onConfigure={onConfigure}
             onDropBranch={onDropBranch}
             onValueChange={onValueChange}
             onDelete={onDelete}
@@ -5090,6 +5235,7 @@ function App() {
   const [activeFileId, setActiveFileId] = useState(() => initialProject.activeFileId);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(() => initialProject.workspaceMode);
   const [examplesOpen, setExamplesOpen] = useState(false);
+  const [webServerConfigTarget, setWebServerConfigTarget] = useState<{ stackId: string; blockId: string } | null>(null);
   const [selectedStackId, setSelectedStackId] = useState<string>("");
   const [rightTab, setRightTab] = useState<RightTab>("preview");
   const [previewKey, setPreviewKey] = useState("A");
@@ -5173,7 +5319,7 @@ function App() {
   const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
   const sceneElements = activeScreen?.elements ?? [];
   const hasMqttMessageEvent = stacks.some((stack) => stack.event.definitionId === "event-mqtt-message");
-  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens), [screenConfig, screens, stacks, variables]);
+  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens, projectFiles), [projectFiles, screenConfig, screens, stacks, variables]);
   const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
     name: currentProject?.name ?? "Projet Minitel",
@@ -6081,6 +6227,31 @@ function App() {
     setStacks((current) => current.map((stack) => (stack.id === stackId ? { ...stack, blocks: updateBlockTree(stack.blocks, blockId, (block) => ({ ...block, values: { ...block.values, [key]: value } })) } : stack)));
   }
 
+  function openWebServerConfiguration(stackId: string, blockId: string) {
+    setWebServerConfigTarget({ stackId, blockId });
+  }
+
+  function saveWebServerConfiguration(port: number, routes: WebServerAssetRoute[]) {
+    if (!webServerConfigTarget) return;
+    pushHistory();
+    setStacks((current) => current.map((stack) => stack.id === webServerConfigTarget.stackId
+      ? {
+          ...stack,
+          blocks: updateBlockTree(stack.blocks, webServerConfigTarget.blockId, (block) => ({
+            ...block,
+            values: {
+              ...block.values,
+              port: num(clamp(Math.round(port), 1, 65535)),
+              assets: serializeWebServerRoutes(routes),
+            },
+          })),
+        }
+      : stack));
+    setWebServerConfigTarget(null);
+    setSimTick((current) => current + 1);
+    flashNotice("Serveur web configuré");
+  }
+
   function updateEventValue(stackId: string, key: string, value: InputValue) {
     pushHistory();
     setStacks((current) => current.map((stack) => (stack.id === stackId ? { ...stack, event: { ...stack.event, values: { ...stack.event.values, [key]: value } } } : stack)));
@@ -6227,6 +6398,7 @@ function App() {
   function changeProjectFiles(next: ProjectAsset[], options: ProjectAssetChangeOptions = {}) {
     if (options.captureHistory !== false) pushHistory();
     setProjectFiles(next);
+    setStacks((current) => repairWebServerFileReferencesInStacks(current, next));
     setActiveFileId((current) => next.some((asset) => asset.id === current) ? current : next[0]?.id ?? "");
   }
 
@@ -6707,6 +6879,9 @@ function App() {
     appUpdate.status === "installing" ? "Installation..." :
     appUpdate.status === "error" ? "Réessayer" :
     appUpdate.message;
+  const configuredWebServerBlock = webServerConfigTarget
+    ? findBlock(stacks.find((stack) => stack.id === webServerConfigTarget.stackId)?.blocks ?? [], webServerConfigTarget.blockId)
+    : undefined;
   const workspaceTitle = workspaceMode === "blocks" ? "Programme" : workspaceMode === "designer" ? "Éditeur d'écran" : "Éditeur de fichiers";
   const workspaceSummary = workspaceMode === "blocks"
     ? stacks.length + " pile" + (stacks.length > 1 ? "s" : "") + " active" + (stacks.length > 1 ? "s" : "")
@@ -6821,7 +6996,7 @@ function App() {
               {stacks.map((stack) => (
                 <section className={"script-stack " + (activeStackId === stack.id ? "selected " : "") + (removingStacks.has(stack.id) ? "deleting " : "") + (draggingStackId === stack.id ? "dragging" : "")} key={stack.id} onClick={() => setSelectedStackId(stack.id)}>
                   <EventHeader stack={stack} variables={variables} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} onStackPointerDown={prepareStackPointerDrag} />
-                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} screens={screens} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
+                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} screens={screens} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onConfigure={openWebServerConfiguration} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
                 </section>
               ))}
             </div>
@@ -6941,6 +7116,22 @@ function App() {
             </div>
           </section>
         </div>
+      ) : null}
+
+      {webServerConfigTarget && configuredWebServerBlock ? (
+        <WebServerConfigDialog
+          key={webServerConfigTarget.stackId + ":" + webServerConfigTarget.blockId}
+          files={projectFiles}
+          initialPort={clamp(Math.round(exprPreviewNumber(configuredWebServerBlock.values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535)}
+          initialRoutes={parseWebServerRoutes(configuredWebServerBlock.values.assets)}
+          onSave={saveWebServerConfiguration}
+          onClose={() => setWebServerConfigTarget(null)}
+          onOpenFiles={() => {
+            setWebServerConfigTarget(null);
+            setWorkspaceMode("files");
+            flashNotice("Ajoute les fichiers à publier");
+          }}
+        />
       ) : null}
 
       <SettingsDialog open={settingsOpen} theme={theme} autoSaveEnabled={autoSaveEnabled} automaticUpdatesEnabled={automaticUpdatesEnabled} testServer={testServer} onThemeChange={setTheme} onAutoSaveChange={setAutoSaveEnabled} onAutomaticUpdatesChange={(enabled) => void changeAutomaticUpdates(enabled)} onTestServerChange={(settings) => void changeTestServerSettings(settings)} onClose={() => setSettingsOpen(false)} />

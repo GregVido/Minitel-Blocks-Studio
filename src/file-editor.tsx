@@ -183,6 +183,16 @@ export function projectAssetSize(asset: ProjectAsset) {
   return Math.max(0, Math.floor(asset.content.length * 3 / 4) - padding);
 }
 
+export function projectAssetBytes(asset: ProjectAsset) {
+  if (asset.encoding === "utf8") return new TextEncoder().encode(asset.content);
+  try {
+    const binary = globalThis.atob(asset.content.replace(/\s+/g, ""));
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return new Uint8Array();
+  }
+}
+
 export function projectAssetsSize(assets: ProjectAsset[]) {
   return assets.reduce((total, asset) => total + projectAssetSize(asset), 0);
 }

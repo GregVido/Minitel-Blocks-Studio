@@ -14,7 +14,7 @@
 
 .web-server-port-panel {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) 112px;
+  grid-template-columns: 42px minmax(130px, 0.8fr) minmax(180px, 1.2fr) 112px;
   align-items: center;
   gap: 11px;
   padding: 13px;
@@ -57,6 +57,7 @@
   font-size: 10px;
 }
 
+.web-server-name-field,
 .web-server-port-field,
 .web-server-route-field {
   display: flex;
@@ -64,6 +65,7 @@
   gap: 4px;
 }
 
+.web-server-name-field span,
 .web-server-port-field span,
 .web-server-route-field span {
   color: var(--text-muted);
@@ -72,6 +74,7 @@
   text-transform: uppercase;
 }
 
+.web-server-name-field input,
 .web-server-port-field input,
 .web-server-route-field input {
   width: 100%;
@@ -87,6 +90,7 @@
   transition: border-color 130ms ease, box-shadow 130ms ease, background-color 130ms ease;
 }
 
+.web-server-name-field input,
 .web-server-port-field input {
   padding: 0 8px;
 }
@@ -96,15 +100,23 @@
   font-family: "Cascadia Code", Consolas, monospace;
 }
 
+.web-server-name-field input:focus,
 .web-server-port-field input:focus,
 .web-server-route-field input:focus {
   border-color: #b75238;
   box-shadow: 0 0 0 3px rgba(183, 82, 56, 0.12);
 }
 
+.web-server-name-field.invalid input,
 .web-server-port-field.invalid input,
 .web-server-file-row.invalid .web-server-route-field input {
   border-color: #d94141;
+}
+
+.web-server-name-field small {
+  color: #b62828;
+  font-size: 9px;
+  font-weight: 750;
 }
 
 .web-server-address {
@@ -383,6 +395,12 @@
   white-space: nowrap;
 }
 
+.web-server-block-summary .web-server-block-name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .block-actions.has-options {
   width: 164px;
   min-width: 164px;
@@ -427,6 +445,14 @@
 }
 
 @media (max-width: 760px) {
+  .web-server-port-panel {
+    grid-template-columns: 42px minmax(0, 1fr) 96px;
+  }
+
+  .web-server-name-field {
+    grid-column: 2 / -1;
+  }
+
   .web-server-file-row {
     grid-template-columns: 26px 34px minmax(0, 1fr);
   }

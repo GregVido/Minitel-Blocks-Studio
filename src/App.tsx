@@ -70,8 +70,10 @@ import {
 } from "./file-editor";
 import ProjectHub, { type NewProjectSettings } from "./project-hub";
 import {
+  DEFAULT_WEB_SERVER_NAME,
   DEFAULT_WEB_SERVER_PORT,
   WebServerConfigDialog,
+  normalizeWebServerName,
   parseWebServerRoutes,
   serializeWebServerRoutes,
   type WebServerAssetRoute,
@@ -1101,6 +1103,7 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "password", label: "mot de passe", type: "text", defaultValue: "minitel123", placeholder: "8 caractères minimum", secret: true },
   ] },
   { id: "web-server-start", title: "démarrer un serveur web", help: "Démarre un serveur HTTP sur l'ESP32 et publie les fichiers choisis dans les options du bloc.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+    { key: "name", label: "nom", type: "text", defaultValue: DEFAULT_WEB_SERVER_NAME, hidden: true },
     { key: "port", label: "port", type: "number", defaultValue: num(DEFAULT_WEB_SERVER_PORT), min: 1, max: 65535, hidden: true },
     { key: "assets", label: "fichiers", type: "text", defaultValue: "[]", hidden: true },
   ] },
@@ -2537,6 +2540,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         break;
       }
       case "web-server-start": {
+        const serverName = normalizeWebServerName(textValue(values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME;
         const port = clamp(Math.round(exprPreviewNumber(values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535);
         const files = context?.projectFiles ?? [];
         const symbols = context?.webAssetSymbols ?? {};
@@ -2548,6 +2552,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
           seenPaths.add(route.path);
           return [{ route, asset, symbol }];
         });
+        pushLine(lines, indent, "// Serveur web : " + serverName);
         pushLine(lines, indent, "if (mbsWebServer == nullptr) {");
         pushLine(lines, indent + 2, "mbsWebServer = new WebServer(" + port + ");");
         routes.forEach(({ route, asset, symbol }) => {
@@ -3327,9 +3332,10 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         break;
       }
       case "web-server-start": {
+        const serverName = normalizeWebServerName(textValue(values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME;
         const port = clamp(Math.round(exprPreviewNumber(values.port, state.variables, DEFAULT_WEB_SERVER_PORT)), 1, 65535);
         const routeCount = parseWebServerRoutes(values.assets).length;
-        state.messages.push("Serveur web simulé · port " + port + " · " + routeCount + " fichier" + (routeCount > 1 ? "s" : ""));
+        state.messages.push(serverName + " · serveur web simulé · port " + port + " · " + routeCount + " fichier" + (routeCount > 1 ? "s" : ""));
         break;
       }
       case "mqtt-connect": {
@@ -4863,6 +4869,9 @@ function ProgramBlockView({
   const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
   const isWebServer = definition.id === "web-server-start";
   const webServerRoutes = isWebServer ? parseWebServerRoutes(block.values.assets) : [];
+  const webServerName = isWebServer
+    ? normalizeWebServerName(textValue(block.values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME
+    : DEFAULT_WEB_SERVER_NAME;
   const webServerPort = isWebServer
     ? clamp(Math.round(exprPreviewNumber(block.values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535)
     : DEFAULT_WEB_SERVER_PORT;
@@ -4945,7 +4954,8 @@ function ProgramBlockView({
           {isWebServer ? (
             <div className="web-server-block-summary">
               <Server size={14} />
-              <span>port {webServerPort}</span>
+              <span className="web-server-block-name" title={webServerName}>{webServerName}</span>
+              <span>· port {webServerPort}</span>
               <span>· {webServerRoutes.length} fichier{webServerRoutes.length > 1 ? "s" : ""}</span>
             </div>
           ) : null}
@@ -6231,7 +6241,7 @@ function App() {
     setWebServerConfigTarget({ stackId, blockId });
   }
 
-  function saveWebServerConfiguration(port: number, routes: WebServerAssetRoute[]) {
+  function saveWebServerConfiguration(name: string, port: number, routes: WebServerAssetRoute[]) {
     if (!webServerConfigTarget) return;
     pushHistory();
     setStacks((current) => current.map((stack) => stack.id === webServerConfigTarget.stackId
@@ -6241,6 +6251,7 @@ function App() {
             ...block,
             values: {
               ...block.values,
+              name: normalizeWebServerName(name) || DEFAULT_WEB_SERVER_NAME,
               port: num(clamp(Math.round(port), 1, 65535)),
               assets: serializeWebServerRoutes(routes),
             },
@@ -6249,7 +6260,7 @@ function App() {
       : stack));
     setWebServerConfigTarget(null);
     setSimTick((current) => current + 1);
-    flashNotice("Serveur web configuré");
+    flashNotice((normalizeWebServerName(name) || DEFAULT_WEB_SERVER_NAME) + " configuré");
   }
 
   function updateEventValue(stackId: string, key: string, value: InputValue) {
@@ -7122,6 +7133,7 @@ function App() {
         <WebServerConfigDialog
           key={webServerConfigTarget.stackId + ":" + webServerConfigTarget.blockId}
           files={projectFiles}
+          initialName={normalizeWebServerName(textValue(configuredWebServerBlock.values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME}
           initialPort={clamp(Math.round(exprPreviewNumber(configuredWebServerBlock.values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535)}
           initialRoutes={parseWebServerRoutes(configuredWebServerBlock.values.assets)}
           onSave={saveWebServerConfiguration}

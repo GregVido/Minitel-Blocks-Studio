@@ -10,6 +10,11 @@ import X from "lucide-react/dist/esm/icons/x.js";
 import { projectAssetSize, type ProjectAsset } from "./file-editor";
 
 export const DEFAULT_WEB_SERVER_PORT = 80;
+export const DEFAULT_WEB_SERVER_NAME = "Serveur principal";
+
+export function normalizeWebServerName(value: string) {
+  return value.replace(/\s+/g, " ").trim().slice(0, 48);
+}
 
 export type WebServerAssetRoute = {
   fileId: string;
@@ -81,6 +86,7 @@ type RouteDraft = {
 
 export function WebServerConfigDialog({
   files,
+  initialName,
   initialPort,
   initialRoutes,
   onSave,
@@ -88,13 +94,15 @@ export function WebServerConfigDialog({
   onOpenFiles,
 }: {
   files: ProjectAsset[];
+  initialName: string;
   initialPort: number;
   initialRoutes: WebServerAssetRoute[];
-  onSave: (port: number, routes: WebServerAssetRoute[]) => void;
+  onSave: (name: string, port: number, routes: WebServerAssetRoute[]) => void;
   onClose: () => void;
   onOpenFiles: () => void;
 }) {
   const initialByFile = useMemo(() => new Map(initialRoutes.map((route) => [route.fileId, route.path])), [initialRoutes]);
+  const [name, setName] = useState(normalizeWebServerName(initialName) || DEFAULT_WEB_SERVER_NAME);
   const [port, setPort] = useState(String(initialPort || DEFAULT_WEB_SERVER_PORT));
   const [drafts, setDrafts] = useState<Record<string, RouteDraft>>(() => Object.fromEntries(files.map((asset) => {
     const configuredPath = initialByFile.get(asset.id);
@@ -105,10 +113,12 @@ export function WebServerConfigDialog({
   const normalizedPaths = selectedFiles.map((asset) => normalizeWebServerPath(drafts[asset.id]?.path ?? ""));
   const duplicatePaths = new Set(normalizedPaths.filter((path, index) => normalizedPaths.indexOf(path) !== index));
   const hasEmptyPath = selectedFiles.some((asset) => !(drafts[asset.id]?.path ?? "").trim());
+  const normalizedName = normalizeWebServerName(name);
+  const nameValid = normalizedName.length > 0;
   const parsedPort = Number(port);
   const portValid = Number.isInteger(parsedPort) && parsedPort >= 1 && parsedPort <= 65535;
   const totalBytes = selectedFiles.reduce((total, asset) => total + projectAssetSize(asset), 0);
-  const canSave = portValid && !hasEmptyPath && duplicatePaths.size === 0;
+  const canSave = nameValid && portValid && !hasEmptyPath && duplicatePaths.size === 0;
 
   function updateDraft(fileId: string, patch: Partial<RouteDraft>) {
     setDrafts((current) => ({
@@ -130,6 +140,7 @@ export function WebServerConfigDialog({
   function save() {
     if (!canSave) return;
     onSave(
+      normalizedName,
       parsedPort,
       selectedFiles.map((asset) => ({
         fileId: asset.id,
@@ -145,7 +156,7 @@ export function WebServerConfigDialog({
           <div>
             <span className="modal-kicker">Bloc réseau</span>
             <h2 id="web-server-title">Configurer le serveur web</h2>
-            <p>Choisis son port et les fichiers que l’ESP32 rendra accessibles.</p>
+            <p>Donne-lui un nom, choisis son port et les fichiers que l’ESP32 rendra accessibles.</p>
           </div>
           <button type="button" className="icon-button" onClick={onClose} title="Fermer"><X size={18} /></button>
         </header>
@@ -157,6 +168,19 @@ export function WebServerConfigDialog({
               <strong>Serveur HTTP</strong>
               <span>Il démarre lorsque le programme atteint ce bloc.</span>
             </div>
+            <label className={"web-server-name-field" + (!nameValid ? " invalid" : "")}>
+              <span>Nom du serveur</span>
+              <input
+                type="text"
+                maxLength={48}
+                value={name}
+                aria-invalid={!nameValid}
+                onChange={(event) => setName(event.target.value)}
+                onBlur={() => { if (normalizedName) setName(normalizedName); }}
+                placeholder="Serveur principal"
+              />
+              {!nameValid ? <small>Le nom est obligatoire.</small> : null}
+            </label>
             <label className={"web-server-port-field" + (!portValid ? " invalid" : "")}>
               <span>Port</span>
               <input type="number" min="1" max="65535" step="1" value={port} onChange={(event) => setPort(event.target.value)} />

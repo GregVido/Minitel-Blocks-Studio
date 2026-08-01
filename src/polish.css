@@ -2745,6 +2745,84 @@ textarea:focus-visible {
 }
 
 
+/* Web GET event */
+.web-server-control select {
+  width: min(220px, 100%);
+  max-width: 220px;
+}
+
+.web-get-simulator {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) auto;
+  align-items: end;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #e4c4b8;
+  border-radius: 7px;
+  background: #fff6f2;
+  animation: statEnter 220ms ease both;
+}
+
+.web-get-simulator-title {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #914326;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.web-get-simulator label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.web-get-simulator label > span {
+  color: #66564f;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.web-get-simulator input,
+.web-get-simulator select {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid #ddc9c0;
+  border-radius: 6px;
+  outline: none;
+  background: #ffffff;
+  color: #172033;
+  font: inherit;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.web-get-simulator input:focus,
+.web-get-simulator select:focus {
+  border-color: #bd5636;
+  box-shadow: 0 0 0 3px rgba(189, 86, 54, 0.14);
+}
+
+.web-get-simulator .web-get-test {
+  min-width: 118px;
+}
+
+@media (max-width: 1320px) {
+  .web-get-simulator {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .web-get-simulator .web-get-test {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
+
 /* Recursive text operations */
 .text-expression {
   width: auto;

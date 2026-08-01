@@ -74,13 +74,14 @@ import {
   DEFAULT_WEB_SERVER_PORT,
   WebServerConfigDialog,
   normalizeWebServerName,
+  normalizeWebServerPath,
   parseWebServerRoutes,
   serializeWebServerRoutes,
   type WebServerAssetRoute,
 } from "./web-server-config";
 
 type BlockKind = "event" | "action" | "control" | "value";
-type InputType = "text" | "text-value" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "query";
+type InputType = "text" | "text-value" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "web-server" | "query";
 type ExprType = "number" | "boolean" | "text";
 type VariableValueType = "number" | "text";
 type RightTab = "preview" | "code" | "upload";
@@ -398,6 +399,18 @@ type SimulatedMqttMessage = {
   payload: string;
 };
 
+type SimulatedWebGet = {
+  serverId: string;
+  path: string;
+};
+
+type WebServerDescriptor = {
+  referenceId: string;
+  blockId: string;
+  name: string;
+  port: number;
+};
+
 type UploadResult = {
   ok: boolean;
   output: string;
@@ -426,6 +439,9 @@ type CodeContext = {
   colorEnabled?: boolean;
   projectFiles?: ProjectAsset[];
   webAssetSymbols?: Record<string, string>;
+  webServers?: WebServerDescriptor[];
+  webServerSymbols?: Record<string, string>;
+  webServerGetStacks?: ScriptStack[];
 };
 
 type ProjectExample = {
@@ -542,10 +558,13 @@ function cloneValue<T extends InputValue>(value: T): T {
 }
 
 function cloneBlock(block: ProgramBlock): ProgramBlock {
+  const id = uid();
+  const values = Object.fromEntries(Object.entries(block.values).map(([key, value]) => [key, cloneValue(value)]));
+  if (block.definitionId === "web-server-start") values.serverId = id;
   return {
-    id: uid(),
+    id,
     definitionId: block.definitionId,
-    values: Object.fromEntries(Object.entries(block.values).map(([key, value]) => [key, cloneValue(value)])),
+    values,
     children: block.children?.map(cloneBlock),
     elseChildren: block.elseChildren?.map(cloneBlock),
   };
@@ -998,6 +1017,10 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "event-loop", title: "répéter en continu", help: "Pile exécutée à chaque tour de boucle Arduino.", kind: "event", category: "start", color: "#ffb703" },
   { id: "event-key-any", title: "quand une touche arrive", help: "Pile exécutée quand le Minitel envoie une touche.", kind: "event", category: "start", color: "#ffb703" },
   { id: "event-key-char", title: "quand la touche", help: "Pile exécutée pour une touche précise.", kind: "event", category: "start", color: "#ffb703", inputs: [{ key: "key", label: "touche", type: "select", defaultValue: "A", options: keyOptions }] },
+  { id: "event-web-server-get", title: "quand le serveur reçoit GET", help: "Pile exécutée lorsqu'une requête GET arrive sur le chemin choisi.", kind: "event", category: "start", color: "#ffb703", inputs: [
+    { key: "server", label: "serveur", type: "web-server", defaultValue: "", placeholder: "Serveur web" },
+    { key: "path", label: "chemin", type: "text", defaultValue: "/api/bonjour", placeholder: "/api/bonjour" },
+  ] },
   { id: "event-mqtt-message", title: "quand un message MQTT est reçu", help: "Pile exécutée à la réception d'un message MQTT. Laisse le topic vide pour accepter tous les messages.", kind: "event", category: "start", color: "#ffb703", inputs: [
     { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
     { key: "target", label: "message dans", type: "variable", defaultValue: "texte", variableType: "text" },
@@ -1103,6 +1126,7 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "password", label: "mot de passe", type: "text", defaultValue: "minitel123", placeholder: "8 caractères minimum", secret: true },
   ] },
   { id: "web-server-start", title: "démarrer un serveur web", help: "Démarre un serveur HTTP sur l'ESP32 et publie les fichiers choisis dans les options du bloc.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+    { key: "serverId", label: "identifiant", type: "text", defaultValue: "", hidden: true },
     { key: "name", label: "nom", type: "text", defaultValue: DEFAULT_WEB_SERVER_NAME, hidden: true },
     { key: "port", label: "port", type: "number", defaultValue: num(DEFAULT_WEB_SERVER_PORT), min: 1, max: 65535, hidden: true },
     { key: "assets", label: "fichiers", type: "text", defaultValue: "[]", hidden: true },
@@ -1341,6 +1365,10 @@ function normalizeImportedValues(definition: BlockDefinition, value: unknown): V
       if (typeof importedValue === "string") values[input.key] = importedValue.slice(0, 160);
       return;
     }
+    if (input.type === "web-server") {
+      if (typeof importedValue === "string") values[input.key] = importedValue.trim().slice(0, 120);
+      return;
+    }
     const optionValue = typeof importedValue === "string" ? importedValue : String(importedValue);
     if (input.options?.some((option) => option.value === optionValue)) values[input.key] = optionValue;
   });
@@ -1351,12 +1379,18 @@ function normalizeImportedBlock(value: unknown): ProgramBlock | null {
   const source = importedRecord(value);
   const definition = source && typeof source.definitionId === "string" ? blockById[source.definitionId] : undefined;
   if (!definition || definition.kind === "event" || definition.kind === "value") return null;
+  const id = uid();
+  const values = normalizeImportedValues(definition, source?.values);
+  if (definition.id === "web-server-start") {
+    const importedId = typeof source?.id === "string" ? source.id.trim().slice(0, 120) : "";
+    values.serverId = textValue(values.serverId, "").trim().slice(0, 120) || importedId || id;
+  }
   const hasChildren = definition.slots?.some((slot) => slot.key === "children");
   const hasElseChildren = definition.slots?.some((slot) => slot.key === "elseChildren");
   return {
-    id: uid(),
+    id,
     definitionId: definition.id,
-    values: normalizeImportedValues(definition, source?.values),
+    values,
     children: hasChildren ? normalizeImportedBlocks(source?.children) : undefined,
     elseChildren: hasElseChildren ? normalizeImportedBlocks(source?.elseChildren) : undefined,
   };
@@ -1632,10 +1666,13 @@ function defaultValues(definition: BlockDefinition): Values {
 
 function makeBlock(definitionId: string): ProgramBlock {
   const definition = blockById[definitionId];
+  const id = uid();
+  const values = defaultValues(definition);
+  if (definitionId === "web-server-start") values.serverId = id;
   return {
-    id: uid(),
+    id,
     definitionId,
-    values: defaultValues(definition),
+    values,
     children: definition.slots?.some((slot) => slot.key === "children") ? [] : undefined,
     elseChildren: definition.slots?.some((slot) => slot.key === "elseChildren") ? [] : undefined,
   };
@@ -2277,6 +2314,29 @@ function walkBlocks(blocks: ProgramBlock[], visit: (block: ProgramBlock) => void
   });
 }
 
+function collectWebServers(stacks: ScriptStack[]): WebServerDescriptor[] {
+  const servers: WebServerDescriptor[] = [];
+  const usedReferences = new Set<string>();
+  stacks.forEach((stack) => walkBlocks(stack.blocks, (block) => {
+    if (block.definitionId !== "web-server-start") return;
+    const storedReference = textValue(block.values.serverId, "").trim().slice(0, 120);
+    const referenceId = storedReference && !usedReferences.has(storedReference) ? storedReference : block.id;
+    usedReferences.add(referenceId);
+    servers.push({
+      referenceId,
+      blockId: block.id,
+      name: normalizeWebServerName(textValue(block.values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME,
+      port: clamp(Math.round(exprPreviewNumber(block.values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535),
+    });
+  }));
+  return servers;
+}
+
+function resolveWebServer(value: InputValue | undefined, servers: WebServerDescriptor[]) {
+  const requestedId = textValue(value, "").trim();
+  return servers.find((server) => server.referenceId === requestedId) ?? servers[0];
+}
+
 function projectUsesBlock(stacks: ScriptStack[], definitionId: string) {
   return stacks.some((stack) => {
     let found = false;
@@ -2542,9 +2602,21 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "web-server-start": {
         const serverName = normalizeWebServerName(textValue(values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME;
         const port = clamp(Math.round(exprPreviewNumber(values.port, {}, DEFAULT_WEB_SERVER_PORT)), 1, 65535);
+        const serverSymbol = context?.webServerSymbols?.[block.id];
+        if (!serverSymbol) {
+          pushLine(lines, indent, "// Serveur web ignoré : identifiant interne introuvable.");
+          break;
+        }
         const files = context?.projectFiles ?? [];
         const symbols = context?.webAssetSymbols ?? {};
-        const seenPaths = new Set<string>();
+        const eventRoutes = new Map<string, ScriptStack[]>();
+        (context?.webServerGetStacks ?? []).forEach((stack) => {
+          const selectedServer = resolveWebServer(stack.event.values.server, context?.webServers ?? []);
+          if (selectedServer?.blockId !== block.id) return;
+          const path = normalizeWebServerPath(textValue(stack.event.values.path, "/"));
+          eventRoutes.set(path, [...(eventRoutes.get(path) ?? []), stack]);
+        });
+        const seenPaths = new Set<string>(eventRoutes.keys());
         const routes = parseWebServerRoutes(values.assets).flatMap((route) => {
           const asset = files.find((item) => item.id === route.fileId);
           const symbol = symbols[route.fileId];
@@ -2553,18 +2625,24 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
           return [{ route, asset, symbol }];
         });
         pushLine(lines, indent, "// Serveur web : " + serverName);
-        pushLine(lines, indent, "if (mbsWebServer == nullptr) {");
-        pushLine(lines, indent + 2, "mbsWebServer = new WebServer(" + port + ");");
-        routes.forEach(({ route, asset, symbol }) => {
-          const mimeType = asset.mimeType.trim().slice(0, 120) || "application/octet-stream";
-          pushLine(lines, indent + 2, "mbsWebServer->on(" + cppString(route.path) + ", HTTP_GET, []() {");
-          pushLine(lines, indent + 4, "mbsWebServer->send_P(200, " + cppString(mimeType) + ", (PGM_P)" + symbol + ", " + symbol + "Length);");
+        pushLine(lines, indent, "if (" + serverSymbol + " == nullptr) {");
+        pushLine(lines, indent + 2, serverSymbol + " = new WebServer(" + port + ");");
+        eventRoutes.forEach((routeStacks, path) => {
+          pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(path) + ", HTTP_GET, []() {");
+          routeStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, indent + 4, variables, context));
+          pushLine(lines, indent + 4, serverSymbol + "->send(204, \"text/plain\", \"\");");
           pushLine(lines, indent + 2, "});");
         });
-        pushLine(lines, indent + 2, "mbsWebServer->onNotFound([]() {");
-        pushLine(lines, indent + 4, "mbsWebServer->send(404, \"text/plain; charset=utf-8\", \"Fichier introuvable\");");
+        routes.forEach(({ route, asset, symbol }) => {
+          const mimeType = asset.mimeType.trim().slice(0, 120) || "application/octet-stream";
+          pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(route.path) + ", HTTP_GET, []() {");
+          pushLine(lines, indent + 4, serverSymbol + "->send_P(200, " + cppString(mimeType) + ", (PGM_P)" + symbol + ", " + symbol + "Length);");
+          pushLine(lines, indent + 2, "});");
+        });
+        pushLine(lines, indent + 2, serverSymbol + "->onNotFound([]() {");
+        pushLine(lines, indent + 4, serverSymbol + "->send(404, \"text/plain; charset=utf-8\", \"Fichier introuvable\");");
         pushLine(lines, indent + 2, "});");
-        pushLine(lines, indent + 2, "mbsWebServer->begin();");
+        pushLine(lines, indent + 2, serverSymbol + "->begin();");
         pushLine(lines, indent, "}");
         break;
       }
@@ -2762,20 +2840,23 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const mqttMessageStacks = stacks.filter((stack) => stack.event.definitionId === "event-mqtt-message");
+  const webServerGetStacks = stacks.filter((stack) => stack.event.definitionId === "event-web-server-get");
+  const webServers = collectWebServers(stacks);
   const variableTypes = collectVariableTypes(stacks, variables);
   const usesHttpPost = projectUsesBlock(stacks, "http-post-json");
   const usesHttpPut = projectUsesBlock(stacks, "http-put-json");
   const usesHttpPatch = projectUsesBlock(stacks, "http-patch-json");
   const usesHttpDelete = projectUsesBlock(stacks, "http-delete-json");
   const usesHttp = projectUsesBlock(stacks, "http-get-json") || usesHttpPost || usesHttpPut || usesHttpPatch || usesHttpDelete;
-  const usesWebServer = projectUsesBlock(stacks, "web-server-start");
+  const usesWebServer = webServers.length > 0;
   const webAssetIds = collectWebServerAssetIds(stacks);
   const embeddedWebAssets = projectFiles.filter((asset) => webAssetIds.has(asset.id));
   const webAssetSymbols = Object.fromEntries(embeddedWebAssets.map((asset, index) => [asset.id, "mbsWebAsset_" + index]));
+  const webServerSymbols = Object.fromEntries(webServers.map((server, index) => [server.blockId, "mbsWebServer_" + index]));
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
-  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols };
+  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerGetStacks };
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
@@ -2787,7 +2868,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
     "",
     "// " + screenConfig.name + " : " + screenConfig.columns + " x " + screenConfig.rows,
     "MinitelESP32 minitel(Serial2, 16, 17, 1200);",
-    ...(usesWebServer ? ["WebServer *mbsWebServer = nullptr;"] : []),
+    ...(usesWebServer ? webServers.map((server) => "WebServer *" + webServerSymbols[server.blockId] + " = nullptr;") : []),
     ...(usesMqtt ? [
       "WiFiClient mbsMqttNetworkClient;",
       "PubSubClient mbsMqttClient(mbsMqttNetworkClient);",
@@ -3082,7 +3163,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   setupStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, 2, variables, codeContext));
   lines.push("}", "", "void loop() {");
   if (usesMqtt) lines.push("  mbsMqttClient.loop();");
-  if (usesWebServer) lines.push("  if (mbsWebServer != nullptr) mbsWebServer->handleClient();");
+  if (usesWebServer) webServers.forEach((server) => lines.push("  if (" + webServerSymbols[server.blockId] + " != nullptr) " + webServerSymbols[server.blockId] + "->handleClient();"));
 
   if (keyStacks.length > 0) {
     lines.push("  MinitelESP32::Key key = minitel.readKey();");
@@ -3537,12 +3618,14 @@ function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], simulatedWebGets: SimulatedWebGet[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
   const state = createPreviewState(variables, screenConfig);
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const mqttMessageStacks = stacks.filter((stack) => stack.event.definitionId === "event-mqtt-message");
+  const webServerGetStacks = stacks.filter((stack) => stack.event.definitionId === "event-web-server-get");
+  const webServers = collectWebServers(stacks);
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
   setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
@@ -3569,6 +3652,23 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
       applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults);
     });
     if (matchingStacks.length === 0) state.messages.push("Aucun déclencheur pour ce topic");
+  });
+
+  simulatedWebGets.slice(-12).forEach((request) => {
+    const server = webServers.find((candidate) => candidate.referenceId === request.serverId);
+    const path = normalizeWebServerPath(request.path);
+    if (!server) {
+      state.messages.push("GET " + path + " · serveur introuvable");
+      return;
+    }
+    const matchingStacks = webServerGetStacks.filter((stack) => {
+      const selectedServer = resolveWebServer(stack.event.values.server, webServers);
+      const eventPath = normalizeWebServerPath(textValue(stack.event.values.path, "/"));
+      return selectedServer?.blockId === server.blockId && eventPath === path;
+    });
+    state.messages.push("GET " + path + " reçu · " + server.name);
+    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
+    if (matchingStacks.length === 0) state.messages.push("Aucun déclencheur GET pour ce chemin");
   });
 
   state.messages.push("Tour " + loopCount);
@@ -4419,7 +4519,7 @@ function QueryParametersEditor({
   );
 }
 
-function InputControl({ input, value, variables, screens = [], expressionOwner, onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; expressionOwner?: ExpressionDropOwner; onChange: (value: InputValue) => void }) {
+function InputControl({ input, value, variables, screens = [], webServers = [], expressionOwner, onChange }: { input: BlockInput; value: InputValue | undefined; variables: VariableDef[]; screens?: MinitelScene[]; webServers?: WebServerDescriptor[]; expressionOwner?: ExpressionDropOwner; onChange: (value: InputValue) => void }) {
   const actualValue = value ?? input.defaultValue;
   const stopDrag = (event: MouseEvent) => event.stopPropagation();
   const options = input.options ?? [];
@@ -4514,6 +4614,21 @@ function InputControl({ input, value, variables, screens = [], expressionOwner, 
         <select value={selectedScreenId} onChange={(event) => onChange(event.target.value)}>
           {screens.map((screen) => (
             <option value={screen.id} key={screen.id}>{screen.name.trim() || "Écran sans nom"}</option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
+  if (input.type === "web-server") {
+    const selectedServer = resolveWebServer(actualValue, webServers);
+    return (
+      <label className="block-control web-server-control" onMouseDown={stopDrag}>
+        <span>{input.label}</span>
+        <select value={selectedServer?.referenceId ?? ""} onChange={(event) => onChange(event.target.value)} disabled={webServers.length === 0}>
+          {webServers.length === 0 ? <option value="">Ajoute un serveur web</option> : null}
+          {webServers.map((server) => (
+            <option value={server.referenceId} key={server.referenceId}>{server.name} · port {server.port}</option>
           ))}
         </select>
       </label>
@@ -4681,7 +4796,7 @@ function PaletteBlock({
       {visibleInputs.length ? (
         <span className="palette-block-inputs">
           {visibleInputs.slice(0, 2).map((input) => (
-            <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : input.secret ? "••••••" : input.placeholder || expressionLabel(input.defaultValue)}</span>
+            <span className="palette-input-preview" key={input.key}>{input.type === "screen" ? "écran" : input.type === "web-server" ? "serveur" : input.secret ? "••••••" : input.placeholder || expressionLabel(input.defaultValue)}</span>
           ))}
         </span>
       ) : null}
@@ -5013,7 +5128,7 @@ function ProgramBlockView({
   );
 }
 
-function EventHeader({ stack, variables, onEventValueChange, onDeleteStack, onStackPointerDown }: { stack: ScriptStack; variables: VariableDef[]; onEventValueChange: (stackId: string, key: string, value: InputValue) => void; onDeleteStack: (stackId: string) => void; onStackPointerDown: (stack: ScriptStack, event: PointerEvent<HTMLElement>) => void }) {
+function EventHeader({ stack, variables, webServers, onEventValueChange, onDeleteStack, onStackPointerDown }: { stack: ScriptStack; variables: VariableDef[]; webServers: WebServerDescriptor[]; onEventValueChange: (stackId: string, key: string, value: InputValue) => void; onDeleteStack: (stackId: string) => void; onStackPointerDown: (stack: ScriptStack, event: PointerEvent<HTMLElement>) => void }) {
   const definition = blockById[stack.event.definitionId];
   const style = { "--block-color": definition.color } as BlockStyle;
   return (
@@ -5035,7 +5150,7 @@ function EventHeader({ stack, variables, onEventValueChange, onDeleteStack, onSt
         {definition.inputs && definition.inputs.length > 0 ? (
           <div className="block-inputs">
             {definition.inputs.map((input) => (
-              <InputControl key={input.key} input={input} variables={variables} value={stack.event.values[input.key]} expressionOwner={{ owner: "event", stackId: stack.id, inputKey: input.key }} onChange={(value) => onEventValueChange(stack.id, input.key, value)} />
+              <InputControl key={input.key} input={input} variables={variables} webServers={webServers} value={stack.event.values[input.key]} expressionOwner={{ owner: "event", stackId: stack.id, inputKey: input.key }} onChange={(value) => onEventValueChange(stack.id, input.key, value)} />
             ))}
           </div>
         ) : null}
@@ -5266,6 +5381,9 @@ function App() {
   const [mqttPreviewTopic, setMqttPreviewTopic] = useState("minitel/messages");
   const [mqttPreviewPayload, setMqttPreviewPayload] = useState("Bonjour MQTT");
   const [simulatedMqttMessages, setSimulatedMqttMessages] = useState<SimulatedMqttMessage[]>([]);
+  const [webPreviewServerId, setWebPreviewServerId] = useState("");
+  const [webPreviewPath, setWebPreviewPath] = useState("/api/bonjour");
+  const [simulatedWebGets, setSimulatedWebGets] = useState<SimulatedWebGet[]>([]);
   const [simulationHttpResults, setSimulationHttpResults] = useState<Record<string, SimulationHttpState>>({});
   const simulationHttpGenerationRef = useRef(0);
   const simulationHttpPendingRef = useRef<Map<string, number>>(new Map());
@@ -5328,9 +5446,12 @@ function App() {
   const activeBlocks = activeCategory === "variables" ? [...variableValueBlocks, ...categoryBlocks] : categoryBlocks;
   const activeScreen = screens.find((screen) => screen.id === activeScreenId) ?? screens[0];
   const sceneElements = activeScreen?.elements ?? [];
+  const webServers = useMemo(() => collectWebServers(stacks), [stacks]);
+  const selectedWebPreviewServer = webServers.find((server) => server.referenceId === webPreviewServerId) ?? webServers[0];
   const hasMqttMessageEvent = stacks.some((stack) => stack.event.definitionId === "event-mqtt-message");
+  const hasWebServerGetEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-get");
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens, projectFiles), [projectFiles, screenConfig, screens, stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulationHttpResults]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
@@ -5696,6 +5817,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
+    setSimulatedWebGets([]);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)).slice(0, 40), "history-flash"), 0);
   }
 
@@ -5807,11 +5929,27 @@ function App() {
     flashNotice("Message MQTT simulé");
   }
 
+  function triggerSimulatedWebGet() {
+    if (!selectedWebPreviewServer) {
+      flashNotice("Ajoute d'abord un bloc serveur web");
+      return;
+    }
+    const path = normalizeWebServerPath(webPreviewPath);
+    setRightTab("preview");
+    setWebPreviewServerId(selectedWebPreviewServer.referenceId);
+    setWebPreviewPath(path);
+    setSimulatedWebGets((current) => [...current.slice(-11), { serverId: selectedWebPreviewServer.referenceId, path }]);
+    setSimTick((current) => current + 1);
+    void refreshSimulationHttpResults(["event-setup", "event-loop", "event-web-server-get"]);
+    flashNotice("GET " + path + " simulé");
+  }
+
   function resetSimulation() {
     setSimRunning(false);
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
+    setSimulatedWebGets([]);
     clearSimulationHttpResults();
   }
 
@@ -5992,6 +6130,7 @@ function App() {
 
   function createStackFromEvent(eventDefinitionId: string) {
     const stack = makeStack(eventDefinitionId);
+    if (eventDefinitionId === "event-web-server-get") stack.event.values.server = webServers[0]?.referenceId ?? "";
     pushHistory();
     setStacks((current) => [...current, stack]);
     setSelectedStackId(stack.id);
@@ -6359,6 +6498,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
+    setSimulatedWebGets([]);
     window.setTimeout(() => animateBlock(collectBlockIds(nextStacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice("Nouveau programme");
   }
@@ -6381,6 +6521,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
+    setSimulatedWebGets([]);
     setExamplesOpen(false);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice(example.name + " chargé");
@@ -6547,6 +6688,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
+    setSimulatedWebGets([]);
     setExamplesOpen(false);
     lastSavedSignatureRef.current = projectSnapshotSignature(next, parsed.board, { name: summary.name, createdAt: summary.createdAt });
     setSaveState("saved");
@@ -7006,7 +7148,7 @@ function App() {
               {stacks.length === 0 ? <button type="button" className="empty-workspace" onClick={() => createStackFromEvent("event-setup")}><Plus size={22} /><span>Ajouter une pile</span></button> : null}
               {stacks.map((stack) => (
                 <section className={"script-stack " + (activeStackId === stack.id ? "selected " : "") + (removingStacks.has(stack.id) ? "deleting " : "") + (draggingStackId === stack.id ? "dragging" : "")} key={stack.id} onClick={() => setSelectedStackId(stack.id)}>
-                  <EventHeader stack={stack} variables={variables} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} onStackPointerDown={prepareStackPointerDrag} />
+                  <EventHeader stack={stack} variables={variables} webServers={webServers} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} onStackPointerDown={prepareStackPointerDrag} />
                   <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} screens={screens} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onConfigure={openWebServerConfiguration} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
                 </section>
               ))}
@@ -7045,6 +7187,14 @@ function App() {
                   <label><span>Topic</span><input type="text" maxLength={256} value={mqttPreviewTopic} onChange={(event) => setMqttPreviewTopic(event.target.value)} placeholder="minitel/messages" /></label>
                   <label><span>Message</span><input type="text" maxLength={1024} value={mqttPreviewPayload} onChange={(event) => setMqttPreviewPayload(event.target.value)} placeholder="Bonjour MQTT" /></label>
                   <button type="button" className="sim-button mqtt-test" onClick={triggerSimulatedMqttMessage} disabled={!mqttPreviewTopic.trim()} title="Simuler la réception du message"><Play size={15} /><span>Recevoir</span></button>
+                </div>
+              ) : null}
+              {hasWebServerGetEvent ? (
+                <div className="web-get-simulator" aria-label="Simuler une requête GET">
+                  <div className="web-get-simulator-title"><Server size={15} /><span>Requête GET reçue</span></div>
+                  <label><span>Serveur</span><select value={selectedWebPreviewServer?.referenceId ?? ""} onChange={(event) => setWebPreviewServerId(event.target.value)} disabled={webServers.length === 0}>{webServers.length === 0 ? <option value="">Aucun serveur</option> : null}{webServers.map((server) => <option value={server.referenceId} key={server.referenceId}>{server.name} · port {server.port}</option>)}</select></label>
+                  <label><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder="/api/bonjour" /></label>
+                  <button type="button" className="sim-button web-get-test" onClick={triggerSimulatedWebGet} disabled={!selectedWebPreviewServer} title="Simuler la réception de la requête GET"><Play size={15} /><span>Recevoir GET</span></button>
                 </div>
               ) : null}
               <div className="minitel-frame">

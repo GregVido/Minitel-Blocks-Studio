@@ -404,6 +404,17 @@ type SimulatedWebGet = {
   path: string;
 };
 
+type SimulatedJsonResponse = {
+  body: Record<string, unknown>;
+  statusCode: number;
+  started: boolean;
+  sent: boolean;
+};
+
+type PreviewExecutionContext = {
+  webResponse?: SimulatedJsonResponse;
+};
+
 type WebServerDescriptor = {
   referenceId: string;
   blockId: string;
@@ -442,6 +453,10 @@ type CodeContext = {
   webServers?: WebServerDescriptor[];
   webServerSymbols?: Record<string, string>;
   webServerGetStacks?: ScriptStack[];
+  webResponseJsonVariable?: string;
+  webResponseSentVariable?: string;
+  webResponseServerSymbol?: string;
+  jsonResponseEnabled?: boolean;
 };
 
 type ProjectExample = {
@@ -996,6 +1011,15 @@ const baudOptions: SelectOption[] = [
 const TEXT_BLOCK_COLOR = "#8f5cf7";
 const MQTT_BLOCK_COLOR = "#1678a8";
 const HTTP_BLOCK_COLOR = "#b75238";
+const JSON_BLOCK_COLOR = "#6f5bd5";
+const JSON_RESPONSE_BLOCK_IDS = [
+  "json-response-start",
+  "json-response-add-text",
+  "json-response-add-number",
+  "json-response-add-boolean",
+  "json-response-add-json",
+  "json-response-send",
+] as const;
 
 const categories: Category[] = [
   { id: "start", label: "Départ", accent: "#ffb703", icon: Play },
@@ -1008,6 +1032,7 @@ const categories: Category[] = [
   { id: "operators", label: "Opérations", accent: "#59b45f", icon: Sigma },
   { id: "input", label: "Entrées", accent: "#e14d72", icon: Keyboard },
   { id: "network", label: "Réseau", accent: "#0b9f8a", icon: Wifi },
+  { id: "json", label: "JSON", accent: JSON_BLOCK_COLOR, icon: Braces },
   { id: "graphics", label: "Graphique", accent: "#16a6b6", icon: Sparkles },
   { id: "advanced", label: "Avancé", accent: "#5d6679", icon: Cpu },
 ];
@@ -1178,17 +1203,37 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
-  { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "network", color: "#138c7d", inputs: [
+  { id: "json-response-start", title: "commencer une réponse JSON", help: "Prépare un nouvel objet JSON pour répondre à la requête GET en cours.", kind: "action", category: "json", color: JSON_BLOCK_COLOR },
+  { id: "json-response-add-text", title: "ajouter un texte au JSON", help: "Ajoute un champ Texte à la réponse. La clé et la valeur acceptent les variables et les opérations Texte.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "key", label: "clé", type: "text-value", defaultValue: textExpr("message") },
+    { key: "value", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour") },
+  ] },
+  { id: "json-response-add-number", title: "ajouter un nombre au JSON", help: "Ajoute un champ Nombre à la réponse. La valeur accepte les variables et les opérations.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "key", label: "clé", type: "text-value", defaultValue: textExpr("valeur") },
+    { key: "value", label: "nombre", type: "number", defaultValue: num(1) },
+  ] },
+  { id: "json-response-add-boolean", title: "ajouter vrai / faux au JSON", help: "Ajoute un champ vrai ou faux à partir d'une condition, qui peut elle-même contenir d'autres conditions.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "key", label: "clé", type: "text-value", defaultValue: textExpr("actif") },
+    { key: "value", label: "valeur", type: "condition", defaultValue: boolExpr(true) },
+  ] },
+  { id: "json-response-add-json", title: "ajouter un objet ou une liste", help: "Ajoute un objet ou une liste depuis un texte JSON, par exemple une réponse reçue d'une API.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "key", label: "clé", type: "text-value", defaultValue: textExpr("données") },
+    { key: "value", label: "JSON", type: "text-value", defaultValue: textExpr("{}") },
+  ] },
+  { id: "json-response-send", title: "envoyer la réponse JSON", help: "Envoie l'objet JSON au navigateur avec le code HTTP choisi. Sans ce bloc, une réponse 200 est envoyée automatiquement.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "status", label: "code HTTP", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
+  ] },
+  { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
     { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
     { key: "path", label: "clé", type: "text", defaultValue: "title", placeholder: "utilisateur.nom" },
     { key: "target", label: "texte dans", type: "variable", defaultValue: "texte", variableType: "text" },
   ] },
-  { id: "json-read-number", title: "lire nombre du JSON", help: "Lit une valeur numérique dans le JSON et la range dans une variable Nombre.", kind: "action", category: "network", color: "#138c7d", inputs: [
+  { id: "json-read-number", title: "lire nombre du JSON", help: "Lit une valeur numérique dans le JSON et la range dans une variable Nombre.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
     { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
     { key: "path", label: "clé", type: "text", defaultValue: "id", placeholder: "mesures.0.valeur" },
     { key: "target", label: "nombre dans", type: "variable", defaultValue: "maVariable", variableType: "number" },
   ] },
-  { id: "json-if-has", title: "si le JSON contient", help: "Exécute les blocs internes seulement si la clé existe dans la réponse JSON.", kind: "control", category: "network", color: "#138c7d", inputs: [
+  { id: "json-if-has", title: "si le JSON contient", help: "Exécute les blocs internes seulement si la clé existe dans la réponse JSON.", kind: "control", category: "json", color: JSON_BLOCK_COLOR, inputs: [
     { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
     { key: "path", label: "clé", type: "text", defaultValue: "title", placeholder: "utilisateur.nom" },
   ], slots: [{ key: "children", label: "alors" }] },
@@ -2628,9 +2673,29 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "if (" + serverSymbol + " == nullptr) {");
         pushLine(lines, indent + 2, serverSymbol + " = new WebServer(" + port + ");");
         eventRoutes.forEach((routeStacks, path) => {
+          const responseContext: CodeContext = context?.jsonResponseEnabled
+            ? { ...context, webResponseJsonVariable: "mbsWebResponseJson", webResponseSentVariable: "mbsWebResponseSent", webResponseServerSymbol: serverSymbol }
+            : context ?? {};
           pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(path) + ", HTTP_GET, []() {");
-          routeStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, indent + 4, variables, context));
-          pushLine(lines, indent + 4, serverSymbol + "->send(204, \"text/plain\", \"\");");
+          if (context?.jsonResponseEnabled) {
+            pushLine(lines, indent + 4, "cJSON *mbsWebResponseJson = nullptr;");
+            pushLine(lines, indent + 4, "bool mbsWebResponseSent = false;");
+          }
+          routeStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, indent + 4, variables, responseContext));
+          if (context?.jsonResponseEnabled) {
+            pushLine(lines, indent + 4, "if (!mbsWebResponseSent) {");
+            pushLine(lines, indent + 6, "if (mbsWebResponseJson != nullptr) {");
+            pushLine(lines, indent + 8, "char *mbsWebResponseBody = cJSON_PrintUnformatted(mbsWebResponseJson);");
+            pushLine(lines, indent + 8, serverSymbol + "->send(200, \"application/json; charset=utf-8\", mbsWebResponseBody != nullptr ? mbsWebResponseBody : \"{}\");");
+            pushLine(lines, indent + 8, "if (mbsWebResponseBody != nullptr) cJSON_free(mbsWebResponseBody);");
+            pushLine(lines, indent + 6, "} else {");
+            pushLine(lines, indent + 8, serverSymbol + "->send(204, \"text/plain\", \"\");");
+            pushLine(lines, indent + 6, "}");
+            pushLine(lines, indent + 4, "}");
+            pushLine(lines, indent + 4, "if (mbsWebResponseJson != nullptr) cJSON_Delete(mbsWebResponseJson);");
+          } else {
+            pushLine(lines, indent + 4, serverSymbol + "->send(204, \"text/plain\", \"\");");
+          }
           pushLine(lines, indent + 2, "});");
         });
         routes.forEach(({ route, asset, symbol }) => {
@@ -2708,6 +2773,78 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "http-delete-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "DELETE");
         break;
+      case "json-response-start": {
+        const responseJson = context?.webResponseJsonVariable;
+        const responseSent = context?.webResponseSentVariable;
+        if (!responseJson || !responseSent) {
+          pushLine(lines, indent, "// Ce bloc de réponse JSON doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") {");
+        pushLine(lines, indent + 2, "if (" + responseJson + " != nullptr) cJSON_Delete(" + responseJson + ");");
+        pushLine(lines, indent + 2, responseJson + " = cJSON_CreateObject();");
+        pushLine(lines, indent, "}");
+        break;
+      }
+      case "json-response-add-text": {
+        const responseJson = context?.webResponseJsonVariable;
+        const responseSent = context?.webResponseSentVariable;
+        if (!responseJson || !responseSent) {
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetText(" + responseJson + ", String(" + exprCode(values.key, textExpr("message")) + "), String(" + exprCode(values.value, textExpr("")) + "));");
+        break;
+      }
+      case "json-response-add-number": {
+        const responseJson = context?.webResponseJsonVariable;
+        const responseSent = context?.webResponseSentVariable;
+        if (!responseJson || !responseSent) {
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetNumber(" + responseJson + ", String(" + exprCode(values.key, textExpr("valeur")) + "), (double)(" + exprCode(values.value, num(0)) + "));");
+        break;
+      }
+      case "json-response-add-boolean": {
+        const responseJson = context?.webResponseJsonVariable;
+        const responseSent = context?.webResponseSentVariable;
+        if (!responseJson || !responseSent) {
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetBool(" + responseJson + ", String(" + exprCode(values.key, textExpr("actif")) + "), (bool)(" + exprCode(values.value, boolExpr(false)) + "));");
+        break;
+      }
+      case "json-response-add-json": {
+        const responseJson = context?.webResponseJsonVariable;
+        const responseSent = context?.webResponseSentVariable;
+        if (!responseJson || !responseSent) {
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetRaw(" + responseJson + ", String(" + exprCode(values.key, textExpr("données")) + "), String(" + exprCode(values.value, textExpr("{}")) + "));");
+        break;
+      }
+      case "json-response-send": {
+        const responseJson = context?.webResponseJsonVariable;
+        const responseSent = context?.webResponseSentVariable;
+        const serverSymbol = context?.webResponseServerSymbol;
+        if (!responseJson || !responseSent || !serverSymbol) {
+          pushLine(lines, indent, "// Ce bloc d'envoi JSON doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") {");
+        pushLine(lines, indent + 2, "int mbsWebResponseStatus = (int)(" + exprCode(values.status, num(200)) + ");");
+        pushLine(lines, indent + 2, "if (mbsWebResponseStatus < 100 || mbsWebResponseStatus > 599) mbsWebResponseStatus = 200;");
+        pushLine(lines, indent + 2, "if (" + responseJson + " == nullptr) " + responseJson + " = cJSON_CreateObject();");
+        pushLine(lines, indent + 2, "char *mbsWebResponseBody = " + responseJson + " != nullptr ? cJSON_PrintUnformatted(" + responseJson + ") : nullptr;");
+        pushLine(lines, indent + 2, serverSymbol + "->send(mbsWebResponseStatus, \"application/json; charset=utf-8\", mbsWebResponseBody != nullptr ? mbsWebResponseBody : \"{}\");");
+        pushLine(lines, indent + 2, "if (mbsWebResponseBody != nullptr) cJSON_free(mbsWebResponseBody);");
+        pushLine(lines, indent + 2, responseSent + " = true;");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "json-read-text":
         pushLine(lines, indent, "mbsJsonReadText(" + sanitizeIdentifier(textValue(values.source, "reponseJson")) + ", " + cppString(values.path) + ", " + sanitizeIdentifier(textValue(values.target, "texte")) + ");");
         break;
@@ -2854,9 +2991,10 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const webAssetSymbols = Object.fromEntries(embeddedWebAssets.map((asset, index) => [asset.id, "mbsWebAsset_" + index]));
   const webServerSymbols = Object.fromEntries(webServers.map((server, index) => [server.blockId, "mbsWebServer_" + index]));
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
-  const usesJson = usesHttp || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
+  const usesJsonResponse = JSON_RESPONSE_BLOCK_IDS.some((definitionId) => projectUsesBlock(stacks, definitionId));
+  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
-  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerGetStacks };
+  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerGetStacks, jsonResponseEnabled: usesJsonResponse };
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
@@ -2968,6 +3106,45 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
       "  const bool found = mbsJsonItemAtPath(document, path) != nullptr;",
       "  cJSON_Delete(document);",
       "  return found;",
+      "}",
+    );
+  }
+
+  if (usesJsonResponse) {
+    lines.push(
+      "",
+      "cJSON *mbsJsonResponseObject(cJSON *&document) {",
+      "  if (document == nullptr) document = cJSON_CreateObject();",
+      "  return document;",
+      "}",
+      "",
+      "void mbsJsonResponseSetText(cJSON *&document, const String &key, const String &value) {",
+      "  if (key.length() == 0 || mbsJsonResponseObject(document) == nullptr) return;",
+      "  cJSON_DeleteItemFromObjectCaseSensitive(document, key.c_str());",
+      "  cJSON_AddStringToObject(document, key.c_str(), value.c_str());",
+      "}",
+      "",
+      "void mbsJsonResponseSetNumber(cJSON *&document, const String &key, double value) {",
+      "  if (key.length() == 0 || mbsJsonResponseObject(document) == nullptr) return;",
+      "  cJSON_DeleteItemFromObjectCaseSensitive(document, key.c_str());",
+      "  cJSON_AddNumberToObject(document, key.c_str(), value);",
+      "}",
+      "",
+      "void mbsJsonResponseSetBool(cJSON *&document, const String &key, bool value) {",
+      "  if (key.length() == 0 || mbsJsonResponseObject(document) == nullptr) return;",
+      "  cJSON_DeleteItemFromObjectCaseSensitive(document, key.c_str());",
+      "  cJSON_AddBoolToObject(document, key.c_str(), value);",
+      "}",
+      "",
+      "void mbsJsonResponseSetRaw(cJSON *&document, const String &key, const String &value) {",
+      "  cJSON *item = cJSON_Parse(value.c_str());",
+      "  if (item == nullptr) return;",
+      "  if (key.length() == 0 || mbsJsonResponseObject(document) == nullptr) {",
+      "    cJSON_Delete(item);",
+      "    return;",
+      "  }",
+      "  cJSON_DeleteItemFromObjectCaseSensitive(document, key.c_str());",
+      "  if (!cJSON_AddItemToObject(document, key.c_str(), item)) cJSON_Delete(item);",
       "}",
     );
   }
@@ -3268,7 +3445,7 @@ function compactPreviewVariable(value: number | string) {
   return text.length > 56 ? text.slice(0, 53) + "..." : text;
 }
 
-function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>, depth = 0) {
+function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>, depth = 0, context?: PreviewExecutionContext) {
   blocks.forEach((block) => {
     const values = block.values;
     switch (block.definitionId) {
@@ -3361,21 +3538,21 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "control-repeat": {
         const count = clamp(exprPreviewNumber(values.times, state.variables, 10), 0, 20);
         for (let index = 0; index < count; index += 1) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1, context);
         }
         break;
       }
       case "control-forever":
         state.messages.push("Toujours: aperçu 1 tour");
-        applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
+        applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1, context);
         break;
       case "control-if":
         if (exprPreviewBoolean(values.condition, state.variables)) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1, context);
         }
         break;
       case "control-if-else":
-        applyBlocksPreview(state, exprPreviewBoolean(values.condition, state.variables) ? block.children ?? [] : block.elseChildren ?? [], previewKey, screens, httpResults, depth + 1);
+        applyBlocksPreview(state, exprPreviewBoolean(values.condition, state.variables) ? block.children ?? [] : block.elseChildren ?? [], previewKey, screens, httpResults, depth + 1, context);
         break;
       case "control-for": {
         const name = textValue(values.variable, "compteur");
@@ -3385,7 +3562,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         let guard = 0;
         for (let current = from; current <= to && guard < 20; current += step) {
           state.variables[name] = current;
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1, context);
           guard += 1;
         }
         break;
@@ -3530,6 +3707,65 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         }
         break;
       }
+      case "json-response-start": {
+        const response = context?.webResponse;
+        if (response && !response.sent) {
+          response.body = {};
+          response.statusCode = 200;
+          response.started = true;
+        }
+        break;
+      }
+      case "json-response-add-text": {
+        const response = context?.webResponse;
+        const key = exprPreviewText(values.key, state.variables).trim();
+        if (response && !response.sent && key) {
+          response.started = true;
+          response.body[key] = exprPreviewText(values.value, state.variables);
+        }
+        break;
+      }
+      case "json-response-add-number": {
+        const response = context?.webResponse;
+        const key = exprPreviewText(values.key, state.variables).trim();
+        if (response && !response.sent && key) {
+          response.started = true;
+          response.body[key] = exprPreviewNumber(values.value, state.variables, 0);
+        }
+        break;
+      }
+      case "json-response-add-boolean": {
+        const response = context?.webResponse;
+        const key = exprPreviewText(values.key, state.variables).trim();
+        if (response && !response.sent && key) {
+          response.started = true;
+          response.body[key] = exprPreviewBoolean(values.value, state.variables);
+        }
+        break;
+      }
+      case "json-response-add-json": {
+        const response = context?.webResponse;
+        const key = exprPreviewText(values.key, state.variables).trim();
+        if (response && !response.sent && key) {
+          try {
+            response.body[key] = JSON.parse(exprPreviewText(values.value, state.variables, "{}")) as unknown;
+            response.started = true;
+          } catch {
+            state.messages.push("Objet JSON invalide · " + key);
+          }
+        }
+        break;
+      }
+      case "json-response-send": {
+        const response = context?.webResponse;
+        if (response && !response.sent) {
+          const statusCode = Math.round(exprPreviewNumber(values.status, state.variables, 200));
+          response.statusCode = statusCode >= 100 && statusCode <= 599 ? statusCode : 200;
+          response.started = true;
+          response.sent = true;
+        }
+        break;
+      }
       case "json-read-text": {
         const source = String(state.variables[textValue(values.source, "reponseJson")] ?? "");
         const result = previewJsonPath(source, textValue(values.path, ""));
@@ -3550,7 +3786,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "json-if-has": {
         const source = String(state.variables[textValue(values.source, "reponseJson")] ?? "");
         if (previewJsonPath(source, textValue(values.path, "")).found) {
-          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1);
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1, context);
         }
         break;
       }
@@ -3667,8 +3903,19 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
       return selectedServer?.blockId === server.blockId && eventPath === path;
     });
     state.messages.push("GET " + path + " reçu · " + server.name);
-    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
-    if (matchingStacks.length === 0) state.messages.push("Aucun déclencheur GET pour ce chemin");
+    if (matchingStacks.length === 0) {
+      state.messages.push("Aucun déclencheur GET pour ce chemin");
+      return;
+    }
+    const response: SimulatedJsonResponse = { body: {}, statusCode: 200, started: false, sent: false };
+    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { webResponse: response }));
+    if (response.started || response.sent) {
+      const body = JSON.stringify(response.body);
+      const preview = body.length > 72 ? body.slice(0, 69) + "..." : body;
+      state.messages.push("JSON " + response.statusCode + " · " + preview);
+    } else {
+      state.messages.push("Réponse 204 · vide");
+    }
   });
 
   state.messages.push("Tour " + loopCount);
@@ -7205,7 +7452,7 @@ function App() {
                   })}
                 </div>
               </div>
-              <div className="event-strip">{preview.messages.slice(-6).map((message, index) => <span key={message + index}>{message}</span>)}</div>
+              <div className="event-strip">{preview.messages.slice(-6).map((message, index) => <span key={message + index} title={message}>{message}</span>)}</div>
               <div className="sim-stats"><span className="baud-stat">Débit : {preview.baudRate} bauds</span>{Object.entries(preview.variables).map(([name, value]) => <span key={name} title={String(value)}>{name}: {compactPreviewVariable(value)}</span>)}</div>
             </div>
           ) : null}

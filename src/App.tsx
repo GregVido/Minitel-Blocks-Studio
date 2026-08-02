@@ -402,6 +402,7 @@ type SimulatedMqttMessage = {
 type SimulatedWebGet = {
   serverId: string;
   path: string;
+  query: string;
 };
 
 type SimulatedJsonResponse = {
@@ -413,6 +414,7 @@ type SimulatedJsonResponse = {
 
 type PreviewExecutionContext = {
   webResponse?: SimulatedJsonResponse;
+  webQuery?: Record<string, string>;
 };
 
 type WebServerDescriptor = {
@@ -456,6 +458,7 @@ type CodeContext = {
   webResponseJsonVariable?: string;
   webResponseSentVariable?: string;
   webResponseServerSymbol?: string;
+  webRequestServerSymbol?: string;
   jsonResponseEnabled?: boolean;
 };
 
@@ -1156,6 +1159,17 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "port", label: "port", type: "number", defaultValue: num(DEFAULT_WEB_SERVER_PORT), min: 1, max: 65535, hidden: true },
     { key: "assets", label: "fichiers", type: "text", defaultValue: "[]", hidden: true },
   ] },
+  { id: "web-get-query-text", title: "lire le paramètre GET", help: "Lit un paramètre de l'adresse, par exemple test dans ?exemple=5&test=ok, puis le range dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+    { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
+    { key: "target", label: "texte dans", type: "variable", defaultValue: "texte", variableType: "text" },
+  ] },
+  { id: "web-get-query-number", title: "lire le paramètre GET en nombre", help: "Lit un paramètre numérique de l'adresse, par exemple exemple=5, puis le range dans une variable Nombre.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+    { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("exemple") },
+    { key: "target", label: "nombre dans", type: "variable", defaultValue: "maVariable", variableType: "number" },
+  ] },
+  { id: "web-get-query-if", title: "si le paramètre GET existe", help: "Exécute les blocs internes uniquement lorsque la requête contient ce paramètre.", kind: "control", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+    { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
+  ], slots: [{ key: "children", label: "alors" }] },
   { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
     { key: "port", label: "port", type: "number", defaultValue: num(1883), min: 1, max: 65535, compact: true },
@@ -2673,15 +2687,18 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "if (" + serverSymbol + " == nullptr) {");
         pushLine(lines, indent + 2, serverSymbol + " = new WebServer(" + port + ");");
         eventRoutes.forEach((routeStacks, path) => {
-          const responseContext: CodeContext = context?.jsonResponseEnabled
-            ? { ...context, webResponseJsonVariable: "mbsWebResponseJson", webResponseSentVariable: "mbsWebResponseSent", webResponseServerSymbol: serverSymbol }
-            : context ?? {};
+          const requestContext: CodeContext = { ...context, webRequestServerSymbol: serverSymbol };
+          if (context?.jsonResponseEnabled) {
+            requestContext.webResponseJsonVariable = "mbsWebResponseJson";
+            requestContext.webResponseSentVariable = "mbsWebResponseSent";
+            requestContext.webResponseServerSymbol = serverSymbol;
+          }
           pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(path) + ", HTTP_GET, []() {");
           if (context?.jsonResponseEnabled) {
             pushLine(lines, indent + 4, "cJSON *mbsWebResponseJson = nullptr;");
             pushLine(lines, indent + 4, "bool mbsWebResponseSent = false;");
           }
-          routeStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, indent + 4, variables, responseContext));
+          routeStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, indent + 4, variables, requestContext));
           if (context?.jsonResponseEnabled) {
             pushLine(lines, indent + 4, "if (!mbsWebResponseSent) {");
             pushLine(lines, indent + 6, "if (mbsWebResponseJson != nullptr) {");
@@ -2708,6 +2725,47 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent + 4, serverSymbol + "->send(404, \"text/plain; charset=utf-8\", \"Fichier introuvable\");");
         pushLine(lines, indent + 2, "});");
         pushLine(lines, indent + 2, serverSymbol + "->begin();");
+        pushLine(lines, indent, "}");
+        break;
+      }
+      case "web-get-query-text": {
+        const serverSymbol = context?.webRequestServerSymbol;
+        if (!serverSymbol) {
+          pushLine(lines, indent, "// La lecture d'un paramètre GET doit être placée sous un départ GET.");
+          break;
+        }
+        const target = sanitizeIdentifier(textValue(values.target, "texte"));
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "String mbsGetQueryKey = String(" + exprCode(values.key, textExpr("test")) + ");");
+        pushLine(lines, indent + 2, target + " = " + serverSymbol + "->hasArg(mbsGetQueryKey) ? " + serverSymbol + "->arg(mbsGetQueryKey) : String();");
+        pushLine(lines, indent, "}");
+        break;
+      }
+      case "web-get-query-number": {
+        const serverSymbol = context?.webRequestServerSymbol;
+        if (!serverSymbol) {
+          pushLine(lines, indent, "// La lecture d'un paramètre GET doit être placée sous un départ GET.");
+          break;
+        }
+        const target = sanitizeIdentifier(textValue(values.target, "maVariable"));
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "String mbsGetQueryKey = String(" + exprCode(values.key, textExpr("exemple")) + ");");
+        pushLine(lines, indent + 2, "String mbsGetQueryValue = " + serverSymbol + "->hasArg(mbsGetQueryKey) ? " + serverSymbol + "->arg(mbsGetQueryKey) : String();");
+        pushLine(lines, indent + 2, target + " = (int)mbsGetQueryValue.toInt();");
+        pushLine(lines, indent, "}");
+        break;
+      }
+      case "web-get-query-if": {
+        const serverSymbol = context?.webRequestServerSymbol;
+        if (!serverSymbol) {
+          pushLine(lines, indent, "// Le test d'un paramètre GET doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "String mbsGetQueryKey = String(" + exprCode(values.key, textExpr("test")) + ");");
+        pushLine(lines, indent + 2, "if (" + serverSymbol + "->hasArg(mbsGetQueryKey)) {");
+        appendBlockCode(lines, block.children ?? [], indent + 4, variables, context);
+        pushLine(lines, indent + 2, "}");
         pushLine(lines, indent, "}");
         break;
       }
@@ -3445,6 +3503,16 @@ function compactPreviewVariable(value: number | string) {
   return text.length > 56 ? text.slice(0, 53) + "..." : text;
 }
 
+function parseSimulatedWebQuery(value: string) {
+  const result = Object.create(null) as Record<string, string>;
+  const query = value.trim().replace(/^\?/, "");
+  if (!query) return result;
+  new URLSearchParams(query).forEach((entryValue, key) => {
+    if (!Object.prototype.hasOwnProperty.call(result, key)) result[key] = entryValue;
+  });
+  return result;
+}
+
 function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>, depth = 0, context?: PreviewExecutionContext) {
   blocks.forEach((block) => {
     const values = block.values;
@@ -3594,6 +3662,30 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         const port = clamp(Math.round(exprPreviewNumber(values.port, state.variables, DEFAULT_WEB_SERVER_PORT)), 1, 65535);
         const routeCount = parseWebServerRoutes(values.assets).length;
         state.messages.push(serverName + " · serveur web simulé · port " + port + " · " + routeCount + " fichier" + (routeCount > 1 ? "s" : ""));
+        break;
+      }
+      case "web-get-query-text": {
+        const key = exprPreviewText(values.key, state.variables).trim();
+        const target = textValue(values.target, "texte");
+        const found = Boolean(key) && Object.prototype.hasOwnProperty.call(context?.webQuery ?? {}, key);
+        state.variables[target] = found ? context?.webQuery?.[key] ?? "" : "";
+        state.messages.push(found ? "GET " + key + " → " + target : "Paramètre GET introuvable · " + (key || "nom vide"));
+        break;
+      }
+      case "web-get-query-number": {
+        const key = exprPreviewText(values.key, state.variables).trim();
+        const target = textValue(values.target, "maVariable");
+        const found = Boolean(key) && Object.prototype.hasOwnProperty.call(context?.webQuery ?? {}, key);
+        const numericValue = Number.parseInt(found ? context?.webQuery?.[key] ?? "" : "", 10);
+        state.variables[target] = Number.isFinite(numericValue) ? numericValue : 0;
+        state.messages.push(found ? "GET " + key + " → " + target : "Paramètre GET introuvable · " + (key || "nom vide"));
+        break;
+      }
+      case "web-get-query-if": {
+        const key = exprPreviewText(values.key, state.variables).trim();
+        if (key && Object.prototype.hasOwnProperty.call(context?.webQuery ?? {}, key)) {
+          applyBlocksPreview(state, block.children ?? [], previewKey, screens, httpResults, depth + 1, context);
+        }
         break;
       }
       case "mqtt-connect": {
@@ -3893,8 +3985,11 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
   simulatedWebGets.slice(-12).forEach((request) => {
     const server = webServers.find((candidate) => candidate.referenceId === request.serverId);
     const path = normalizeWebServerPath(request.path);
+    const queryText = request.query.trim().replace(/^\?/, "");
+    const requestLabel = path + (queryText ? "?" + queryText : "");
+    const query = parseSimulatedWebQuery(queryText);
     if (!server) {
-      state.messages.push("GET " + path + " · serveur introuvable");
+      state.messages.push("GET " + requestLabel + " · serveur introuvable");
       return;
     }
     const matchingStacks = webServerGetStacks.filter((stack) => {
@@ -3902,13 +3997,13 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
       const eventPath = normalizeWebServerPath(textValue(stack.event.values.path, "/"));
       return selectedServer?.blockId === server.blockId && eventPath === path;
     });
-    state.messages.push("GET " + path + " reçu · " + server.name);
+    state.messages.push("GET " + requestLabel + " reçu · " + server.name);
     if (matchingStacks.length === 0) {
       state.messages.push("Aucun déclencheur GET pour ce chemin");
       return;
     }
     const response: SimulatedJsonResponse = { body: {}, statusCode: 200, started: false, sent: false };
-    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { webResponse: response }));
+    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { webResponse: response, webQuery: query }));
     if (response.started || response.sent) {
       const body = JSON.stringify(response.body);
       const preview = body.length > 72 ? body.slice(0, 69) + "..." : body;
@@ -5630,6 +5725,7 @@ function App() {
   const [simulatedMqttMessages, setSimulatedMqttMessages] = useState<SimulatedMqttMessage[]>([]);
   const [webPreviewServerId, setWebPreviewServerId] = useState("");
   const [webPreviewPath, setWebPreviewPath] = useState("/api/bonjour");
+  const [webPreviewQuery, setWebPreviewQuery] = useState("exemple=5&test=ok");
   const [simulatedWebGets, setSimulatedWebGets] = useState<SimulatedWebGet[]>([]);
   const [simulationHttpResults, setSimulationHttpResults] = useState<Record<string, SimulationHttpState>>({});
   const simulationHttpGenerationRef = useRef(0);
@@ -6182,13 +6278,16 @@ function App() {
       return;
     }
     const path = normalizeWebServerPath(webPreviewPath);
+    const query = webPreviewQuery.trim().replace(/^\?/, "");
+    const requestLabel = path + (query ? "?" + query : "");
     setRightTab("preview");
     setWebPreviewServerId(selectedWebPreviewServer.referenceId);
     setWebPreviewPath(path);
-    setSimulatedWebGets((current) => [...current.slice(-11), { serverId: selectedWebPreviewServer.referenceId, path }]);
+    setWebPreviewQuery(query);
+    setSimulatedWebGets((current) => [...current.slice(-11), { serverId: selectedWebPreviewServer.referenceId, path, query }]);
     setSimTick((current) => current + 1);
     void refreshSimulationHttpResults(["event-setup", "event-loop", "event-web-server-get"]);
-    flashNotice("GET " + path + " simulé");
+    flashNotice("GET " + requestLabel + " simulé");
   }
 
   function resetSimulation() {
@@ -7441,6 +7540,7 @@ function App() {
                   <div className="web-get-simulator-title"><Server size={15} /><span>Requête GET reçue</span></div>
                   <label><span>Serveur</span><select value={selectedWebPreviewServer?.referenceId ?? ""} onChange={(event) => setWebPreviewServerId(event.target.value)} disabled={webServers.length === 0}>{webServers.length === 0 ? <option value="">Aucun serveur</option> : null}{webServers.map((server) => <option value={server.referenceId} key={server.referenceId}>{server.name} · port {server.port}</option>)}</select></label>
                   <label><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder="/api/bonjour" /></label>
+                  <label className="web-get-query-field"><span>Paramètres</span><input type="text" maxLength={1000} value={webPreviewQuery} onChange={(event) => setWebPreviewQuery(event.target.value)} placeholder="exemple=5&test=ok" /></label>
                   <button type="button" className="sim-button web-get-test" onClick={triggerSimulatedWebGet} disabled={!selectedWebPreviewServer} title="Simuler la réception de la requête GET"><Play size={15} /><span>Recevoir GET</span></button>
                 </div>
               ) : null}

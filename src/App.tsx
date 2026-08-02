@@ -1014,6 +1014,7 @@ const baudOptions: SelectOption[] = [
 const TEXT_BLOCK_COLOR = "#8f5cf7";
 const MQTT_BLOCK_COLOR = "#1678a8";
 const HTTP_BLOCK_COLOR = "#b75238";
+const WEB_SERVER_BLOCK_COLOR = "#3f7f64";
 const JSON_BLOCK_COLOR = "#6f5bd5";
 const JSON_RESPONSE_BLOCK_IDS = [
   "json-response-start",
@@ -1153,21 +1154,21 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "ssid", label: "nom du hotspot", type: "text", defaultValue: "Minitel-ESP32", placeholder: "Minitel-ESP32" },
     { key: "password", label: "mot de passe", type: "text", defaultValue: "minitel123", placeholder: "8 caractères minimum", secret: true },
   ] },
-  { id: "web-server-start", title: "démarrer un serveur web", help: "Démarre un serveur HTTP sur l'ESP32 et publie les fichiers choisis dans les options du bloc.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+  { id: "web-server-start", title: "démarrer un serveur web", help: "Démarre un serveur HTTP sur l'ESP32 et publie les fichiers choisis dans les options du bloc.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "serverId", label: "identifiant", type: "text", defaultValue: "", hidden: true },
     { key: "name", label: "nom", type: "text", defaultValue: DEFAULT_WEB_SERVER_NAME, hidden: true },
     { key: "port", label: "port", type: "number", defaultValue: num(DEFAULT_WEB_SERVER_PORT), min: 1, max: 65535, hidden: true },
     { key: "assets", label: "fichiers", type: "text", defaultValue: "[]", hidden: true },
   ] },
-  { id: "web-get-query-text", title: "lire le paramètre GET", help: "Lit un paramètre de l'adresse, par exemple test dans ?exemple=5&test=ok, puis le range dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+  { id: "web-get-query-text", title: "lire le paramètre GET", help: "Lit un paramètre de l'adresse, par exemple test dans ?exemple=5&test=ok, puis le range dans une variable Texte.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
     { key: "target", label: "texte dans", type: "variable", defaultValue: "texte", variableType: "text" },
   ] },
-  { id: "web-get-query-number", title: "lire le paramètre GET en nombre", help: "Lit un paramètre numérique de l'adresse, par exemple exemple=5, puis le range dans une variable Nombre.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+  { id: "web-get-query-number", title: "lire le paramètre GET en nombre", help: "Lit un paramètre numérique de l'adresse, par exemple exemple=5, puis le range dans une variable Nombre.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("exemple") },
     { key: "target", label: "nombre dans", type: "variable", defaultValue: "maVariable", variableType: "number" },
   ] },
-  { id: "web-get-query-if", title: "si le paramètre GET existe", help: "Exécute les blocs internes uniquement lorsque la requête contient ce paramètre.", kind: "control", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
+  { id: "web-get-query-if", title: "si le paramètre GET existe", help: "Exécute les blocs internes uniquement lorsque la requête contient ce paramètre.", kind: "control", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
   ], slots: [{ key: "children", label: "alors" }] },
   { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [

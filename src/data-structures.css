@@ -1,0 +1,591 @@
+.data-structure-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f7fafc;
+}
+
+.data-structure-manager-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  color: #263145;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.data-structure-manager-head > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  place-items: center;
+  border: 1px solid #d8e1ec;
+  border-radius: 7px;
+  color: #263145;
+  background: #ffffff;
+}
+
+.data-structure-manager-head > button:hover {
+  border-color: #8e79df;
+  color: #6550bd;
+  transform: translateY(-1px);
+}
+
+.data-structure-empty {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px dashed #ccd7e4;
+  border-radius: 7px;
+  color: #75849a;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.data-structure-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid #ded8f5;
+  border-left: 3px solid #6f5bd5;
+  border-radius: 7px;
+  background: #ffffff;
+  animation: dataStructureCardIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.data-structure-card-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  color: #253047;
+  background: transparent;
+  text-align: left;
+}
+
+.data-structure-card-title {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-structure-card-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.data-structure-card-main small {
+  color: #7a8799;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.data-structure-card-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.data-structure-card-actions button,
+.data-structure-field-actions button,
+.data-structure-dialog-close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #dce4ef;
+  border-radius: 7px;
+  color: #56657b;
+  background: #f8fafc;
+}
+
+.data-structure-card-actions button:hover,
+.data-structure-field-actions button:hover:not(:disabled) {
+  color: #5945b0;
+  border-color: #a99be5;
+  background: #f5f2ff;
+}
+
+.data-structure-schema {
+  display: flex;
+  grid-column: 1 / -1;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.data-structure-schema span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  color: #55449f;
+  background: #f0edff;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.data-structure-schema span i {
+  color: #8274bd;
+  font-style: normal;
+  font-weight: 750;
+}
+
+.data-structure-backdrop {
+  position: fixed;
+  z-index: 1500;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(14, 20, 29, 0.58);
+  backdrop-filter: blur(8px);
+  animation: dataStructureBackdropIn 180ms ease-out both;
+}
+
+.data-structure-dialog {
+  width: min(720px, calc(100vw - 36px));
+  max-height: min(760px, calc(100vh - 36px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #cfd8e5;
+  border-radius: 8px;
+  color: #1f293b;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(8, 15, 24, 0.3);
+  animation: dataStructureDialogIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.data-structure-dialog > header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e0e6ef;
+  background: #f7f9fc;
+}
+
+.data-structure-dialog-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 7px;
+  color: #ffffff;
+  background: #6f5bd5;
+}
+
+.data-structure-dialog header div {
+  min-width: 0;
+}
+
+.data-structure-dialog header small {
+  display: block;
+  color: #7a8798;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.data-structure-dialog h2 {
+  margin: 1px 0 0;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+.data-structure-dialog-close {
+  margin-left: auto;
+}
+
+.data-structure-dialog-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: auto;
+}
+
+.data-structure-name-field {
+  display: grid;
+  gap: 6px;
+}
+
+.data-structure-name-field span,
+.data-structure-fields-head {
+  color: #65748a;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.data-structure-name-field input,
+.data-structure-field-row input,
+.data-structure-field-row select {
+  min-width: 0;
+  height: 38px;
+  border: 1px solid #d4dde9;
+  border-radius: 7px;
+  padding: 0 10px;
+  color: #202a3c;
+  background: #ffffff;
+  font-weight: 800;
+}
+
+.data-structure-name-field input:focus,
+.data-structure-field-row input:focus,
+.data-structure-field-row select:focus {
+  outline: 0;
+  border-color: #7e68d9;
+  box-shadow: 0 0 0 3px rgba(111, 91, 213, 0.14);
+}
+
+.data-structure-fields-head,
+.data-structure-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 0.7fr) 100px;
+  align-items: center;
+  gap: 9px;
+}
+
+.data-structure-fields-head {
+  padding: 0 5px;
+}
+
+.data-structure-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.data-structure-field-row {
+  padding: 8px;
+  border: 1px solid #e0e6ef;
+  border-radius: 7px;
+  background: #f8fafc;
+  animation: dataStructureFieldIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.data-structure-field-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.data-structure-field-actions button:disabled {
+  opacity: 0.32;
+}
+
+.data-structure-add-field {
+  display: inline-flex;
+  min-height: 36px;
+  align-self: flex-start;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid #cfc5f2;
+  border-radius: 7px;
+  color: #5945b0;
+  background: #f3f0ff;
+  font-weight: 900;
+}
+
+.data-structure-error {
+  padding: 9px 11px;
+  border: 1px solid #f0b3b0;
+  border-radius: 7px;
+  color: #9b3432;
+  background: #fff1f0;
+  font-size: 12px;
+  font-weight: 850;
+  animation: dataStructureFieldIn 180ms ease-out both;
+}
+
+.data-structure-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #e0e6ef;
+  background: #f7f9fc;
+}
+
+.data-structure-dialog > footer button {
+  min-height: 38px;
+  padding: 0 15px;
+  border: 1px solid #d0d9e5;
+  border-radius: 7px;
+  color: #334055;
+  background: #ffffff;
+  font-weight: 900;
+}
+
+.data-structure-dialog > footer button.primary {
+  border-color: #6652c5;
+  color: #ffffff;
+  background: #6f5bd5;
+}
+
+[data-theme="dark"] .data-structure-manager {
+  border-color: var(--border);
+  background: #192128;
+}
+
+[data-theme="dark"] .data-structure-manager-head,
+[data-theme="dark"] .data-structure-card-main {
+  color: var(--text);
+}
+
+[data-theme="dark"] .data-structure-manager-head > button,
+[data-theme="dark"] .data-structure-card,
+[data-theme="dark"] .data-structure-card-actions button {
+  border-color: var(--border);
+  color: var(--text);
+  background: #202832;
+}
+
+[data-theme="dark"] .data-structure-empty {
+  border-color: #3b4653;
+  color: var(--text-muted);
+}
+
+[data-theme="dark"] .data-structure-schema span {
+  color: #c9bfff;
+  background: #322b54;
+}
+
+[data-theme="dark"] .data-structure-schema span i {
+  color: #a99be7;
+}
+
+[data-theme="dark"] .data-structure-dialog {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: #202832;
+}
+
+[data-theme="dark"] .data-structure-dialog > header,
+[data-theme="dark"] .data-structure-dialog > footer {
+  border-color: var(--border);
+  background: #1a2129;
+}
+
+[data-theme="dark"] .data-structure-name-field input,
+[data-theme="dark"] .data-structure-field-row input,
+[data-theme="dark"] .data-structure-field-row select {
+  border-color: var(--border);
+  color: var(--text);
+  background: #141a21;
+}
+
+[data-theme="dark"] .data-structure-field-row {
+  border-color: var(--border);
+  background: #252e38;
+}
+
+[data-theme="dark"] .data-structure-field-actions button,
+[data-theme="dark"] .data-structure-dialog-close,
+[data-theme="dark"] .data-structure-dialog > footer button {
+  border-color: var(--border);
+  color: var(--text);
+  background: #2a3440;
+}
+
+[data-theme="dark"] .data-structure-add-field {
+  border-color: #5e528d;
+  color: #d2c9ff;
+  background: #302a4d;
+}
+
+[data-theme="dark"] .data-structure-error {
+  border-color: #7d4442;
+  color: #ffaaa5;
+  background: #3c2324;
+}
+
+@keyframes dataStructureBackdropIn {
+  from { opacity: 0; backdrop-filter: blur(0); }
+  to { opacity: 1; backdrop-filter: blur(8px); }
+}
+
+@keyframes dataStructureDialogIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes dataStructureCardIn {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dataStructureFieldIn {
+  from { opacity: 0; transform: translateX(-5px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (max-width: 640px) {
+  .data-structure-fields-head {
+    display: none;
+  }
+
+  .data-structure-field-row {
+    grid-template-columns: minmax(0, 1fr) 120px;
+  }
+
+  .data-structure-field-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .data-structure-backdrop,
+  .data-structure-dialog,
+  .data-structure-card,
+  .data-structure-field-row {
+    animation: none;
+  }
+}
+
+
+.data-structure-block-editor {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 7px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.24);
+}
+
+.data-structure-block-toolbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(140px, 0.8fr);
+  gap: 7px;
+}
+
+.data-structure-block-toolbar label,
+.data-structure-block-target {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  color: #283047;
+  background: rgba(255, 255, 255, 0.92);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.data-structure-block-toolbar label > span,
+.data-structure-block-target > span {
+  flex: 0 0 auto;
+  color: #66748a;
+}
+
+.data-structure-block-toolbar select,
+.data-structure-block-target select {
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  border: 1px solid #d8dfeb;
+  border-radius: 6px;
+  padding: 0 24px 0 7px;
+  color: #273148;
+  background: #ffffff;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.data-structure-block-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.data-structure-block-field {
+  display: grid;
+  grid-template-columns: minmax(105px, 0.34fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.13);
+  animation: dataStructureFieldIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.data-structure-block-field-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.data-structure-block-field-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #ffffff;
+  font-size: 11px;
+}
+
+.data-structure-block-field-meta span {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.data-structure-block-field-value {
+  min-width: 0;
+  overflow: visible;
+}
+
+.data-structure-block-field-value > .expression-pill {
+  max-width: 100%;
+}
+
+.data-structure-block-target {
+  justify-self: stretch;
+}
+
+.data-structure-block-empty {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+@media (max-width: 780px) {
+  .data-structure-block-toolbar,
+  .data-structure-block-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

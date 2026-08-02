@@ -79,6 +79,14 @@ import {
   serializeWebServerRoutes,
   type WebServerAssetRoute,
 } from "./web-server-config";
+import {
+  DataStructureManager,
+  dataStructureFieldTypeLabel,
+  normalizeDataStructures,
+  type DataStructureDef,
+  type DataStructureField,
+  type DataStructureFieldType,
+} from "./data-structures";
 
 type BlockKind = "event" | "action" | "control" | "value";
 type InputType = "text" | "text-value" | "number" | "select" | "color" | "boolean" | "variable" | "condition" | "screen" | "web-server" | "query";
@@ -261,6 +269,7 @@ type VariableDef = {
 type ProjectSnapshot = {
   stacks: ScriptStack[];
   variables: VariableDef[];
+  dataStructures: DataStructureDef[];
   screenConfig: MinitelScreenConfig;
   screens: MinitelScene[];
   activeScreenId: string;
@@ -276,7 +285,7 @@ type ProjectMetadata = {
 
 type ProjectFile = {
   format: "minitel-blocks-studio";
-  version: 3;
+  version: 4;
   savedAt: string;
   board: string;
   metadata: ProjectMetadata;
@@ -415,6 +424,8 @@ type SimulatedJsonResponse = {
 type PreviewExecutionContext = {
   webResponse?: SimulatedJsonResponse;
   webQuery?: Record<string, string>;
+  dataStructures?: DataStructureDef[];
+  variables?: VariableDef[];
 };
 
 type WebServerDescriptor = {
@@ -459,6 +470,7 @@ type CodeContext = {
   webResponseSentVariable?: string;
   webResponseServerSymbol?: string;
   webRequestServerSymbol?: string;
+  dataStructures?: DataStructureDef[];
   jsonResponseEnabled?: boolean;
 };
 
@@ -475,7 +487,7 @@ const DELETE_ANIMATION_MS = 260;
 const BLOCK_MOTION_MS = 430;
 const HISTORY_LIMIT = 80;
 const PROJECT_FILE_FORMAT = "minitel-blocks-studio";
-const PROJECT_FILE_VERSION = 3;
+const PROJECT_FILE_VERSION = 4;
 const APP_THEME_STORAGE_KEY = "minitel-blocks-theme";
 const APP_AUTO_SAVE_STORAGE_KEY = "minitel-blocks-auto-save";
 const APP_AUTO_UPDATE_STORAGE_KEY = "minitel-blocks-auto-update";
@@ -552,6 +564,53 @@ const textReplaceExpr = (source: Expr, search: Expr, replacement: Expr): TextRep
 const textLengthExpr = (source: Expr): TextLengthExpr => ({ kind: "text-length", valueType: "number", source });
 const textIndexExpr = (source: Expr, search: Expr): TextIndexExpr => ({ kind: "text-index", valueType: "number", source, search });
 const textPredicateExpr = (kind: TextPredicateExpr["kind"], source: Expr, search: Expr): TextPredicateExpr => ({ kind, valueType: "boolean", source, search });
+
+const DATA_STRUCTURE_FIELD_VALUE_PREFIX = "structure-value:";
+const DATA_STRUCTURE_FIELD_TARGET_PREFIX = "structure-target:";
+
+function dataStructureFieldValueKey(fieldId: string) {
+  return DATA_STRUCTURE_FIELD_VALUE_PREFIX + fieldId;
+}
+
+function dataStructureFieldTargetKey(fieldId: string) {
+  return DATA_STRUCTURE_FIELD_TARGET_PREFIX + fieldId;
+}
+
+function resolveDataStructure(value: InputValue | undefined, structures: DataStructureDef[]) {
+  const requestedId = textValue(value, "").trim();
+  return structures.find((structure) => structure.id === requestedId) ?? structures[0];
+}
+
+function dataStructureFieldExpression(value: InputValue | undefined, valueType: DataStructureFieldType, variables: VariableDef[]): Expr {
+  if (valueType === "number") return numberExpression(value);
+  if (valueType === "boolean") return booleanExpression(value, variables);
+  return textExpression(value);
+}
+
+function defaultDataStructureFieldExpression(valueType: DataStructureFieldType, variables: VariableDef[]): Expr {
+  if (valueType === "number") return num(0);
+  if (valueType === "boolean") return boolExpr(true);
+  if (valueType === "json") return textExpr("{}");
+  return textExpr("");
+}
+
+function dataStructureFieldVariableType(field: DataStructureField): VariableValueType {
+  return field.valueType === "number" || field.valueType === "boolean" ? "number" : "text";
+}
+
+function dataStructureTargetName(
+  value: InputValue | undefined,
+  field: DataStructureField,
+  variables: VariableDef[],
+  excludedNames: string[] = [],
+) {
+  const expectedType = dataStructureFieldVariableType(field);
+  const compatibleVariables = variables.filter((variable) => variableValueType(variable) === expectedType);
+  const requestedName = textValue(value, "");
+  if (compatibleVariables.some((variable) => variable.name === requestedName)) return requestedName;
+  const excluded = new Set(excludedNames);
+  return compatibleVariables.find((variable) => !excluded.has(variable.name))?.name ?? compatibleVariables[0]?.name ?? "";
+}
 
 function expressionOperatorGlyph(op: BinaryExpr["op"] | CompareExpr["op"] | LogicalExpr["op"]) {
   if (op === "-") return "\u2212";
@@ -702,7 +761,7 @@ function simulationHttpRequest(
   variables: Record<string, number | string> = {},
 ): SimulationHttpRequest {
   const url = httpRequestUrl(values, variables);
-  const body = method === "POST" || method === "PUT" || method === "PATCH" ? textValue(values.body, "{}") : undefined;
+  const body = method === "POST" || method === "PUT" || method === "PATCH" ? exprPreviewText(values.body, variables, "{}") : undefined;
   return {
     key: JSON.stringify([method, url, body ?? ""]),
     method,
@@ -1198,25 +1257,33 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "http-post-json", title: "requête POST JSON", help: "Envoie un corps JSON et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
-    { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"bonjour\"}", placeholder: "{\"message\":\"bonjour\"}" },
+    { key: "body", label: "corps JSON", type: "text-value", defaultValue: textExpr("{\"message\":\"bonjour\"}"), placeholder: "{\"message\":\"bonjour\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "http-put-json", title: "requête PUT JSON", help: "Met à jour une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
-    { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"message\":\"mise à jour\"}", placeholder: "{\"message\":\"mise à jour\"}" },
+    { key: "body", label: "corps JSON", type: "text-value", defaultValue: textExpr("{\"message\":\"mise à jour\"}"), placeholder: "{\"message\":\"mise à jour\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "http-patch-json", title: "requête PATCH JSON", help: "Modifie partiellement une ressource avec un corps JSON et stocke la réponse dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
-    { key: "body", label: "corps JSON", type: "text", defaultValue: "{\"champ\":\"nouvelle valeur\"}", placeholder: "{\"champ\":\"nouvelle valeur\"}" },
+    { key: "body", label: "corps JSON", type: "text-value", defaultValue: textExpr("{\"champ\":\"nouvelle valeur\"}"), placeholder: "{\"champ\":\"nouvelle valeur\"}" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
   ] },
   { id: "http-delete-json", title: "requête DELETE JSON", help: "Supprime une ressource et stocke la réponse JSON dans une variable Texte.", kind: "action", category: "network", color: HTTP_BLOCK_COLOR, inputs: [
     { key: "url", label: "URL", type: "text", defaultValue: "http://localhost:6663/echo", placeholder: "http://localhost:6663/echo" },
     { key: "query", label: "query", type: "query", defaultValue: "", placeholder: "clé = valeur" },
     { key: "target", label: "réponse dans", type: "variable", defaultValue: "reponseJson", variableType: "text" },
+  ] },
+  { id: "json-structure-build", title: "construire JSON avec une structure", help: "Construit un objet JSON conforme à une structure de données du projet et le range dans une variable Texte.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
+    { key: "target", label: "JSON dans", type: "variable", defaultValue: "reponseJson", variableType: "text", hidden: true },
+  ] },
+  { id: "json-structure-read", title: "lire JSON avec une structure", help: "Lit tous les champs d’un objet JSON selon la structure choisie et les range dans les variables associées.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
+    { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text", hidden: true },
   ] },
   { id: "json-response-start", title: "commencer une réponse JSON", help: "Prépare un nouvel objet JSON pour répondre à la requête GET en cours.", kind: "action", category: "json", color: JSON_BLOCK_COLOR },
   { id: "json-response-add-text", title: "ajouter un texte au JSON", help: "Ajoute un champ Texte à la réponse. La clé et la valeur acceptent les variables et les opérations Texte.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
@@ -1445,6 +1512,25 @@ function normalizeImportedBlock(value: unknown): ProgramBlock | null {
     const importedId = typeof source?.id === "string" ? source.id.trim().slice(0, 120) : "";
     values.serverId = textValue(values.serverId, "").trim().slice(0, 120) || importedId || id;
   }
+  const importedValues = importedRecord(source?.values);
+  if (definition.id === "json-structure-build" && importedValues) {
+    Object.entries(importedValues).forEach(([key, importedValue]) => {
+      if (!key.startsWith(DATA_STRUCTURE_FIELD_VALUE_PREFIX) || key.length > 220) return;
+      const expression = importedRecord(importedValue);
+      values[key] = expression?.valueType === "boolean"
+        ? normalizeImportedCondition(importedValue, boolExpr(true))
+        : expression?.valueType === "number"
+          ? normalizeImportedNumberExpr(importedValue)
+          : normalizeImportedTextValueExpr(importedValue);
+    });
+  }
+  if (definition.id === "json-structure-read" && importedValues) {
+    Object.entries(importedValues).forEach(([key, importedValue]) => {
+      if (key.startsWith(DATA_STRUCTURE_FIELD_TARGET_PREFIX) && key.length <= 220 && typeof importedValue === "string") {
+        values[key] = importedValue.trim().slice(0, 64);
+      }
+    });
+  }
   const hasChildren = definition.slots?.some((slot) => slot.key === "children");
   const hasElseChildren = definition.slots?.some((slot) => slot.key === "elseChildren");
   return {
@@ -1615,6 +1701,25 @@ function repairWebServerFileReferencesInStacks(stacks: ScriptStack[], files: Pro
   return changed ? next : stacks;
 }
 
+function repairDataStructureReferencesInBlocks(blocks: ProgramBlock[], structures: DataStructureDef[]): ProgramBlock[] {
+  const validIds = new Set(structures.map((structure) => structure.id));
+  const fallbackId = structures[0]?.id ?? "";
+  return blocks.map((block) => {
+    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read";
+    const requestedId = textValue(block.values.structureId, "");
+    return {
+      ...block,
+      values: isStructureBlock && !validIds.has(requestedId) ? { ...block.values, structureId: fallbackId } : block.values,
+      children: block.children ? repairDataStructureReferencesInBlocks(block.children, structures) : block.children,
+      elseChildren: block.elseChildren ? repairDataStructureReferencesInBlocks(block.elseChildren, structures) : block.elseChildren,
+    };
+  });
+}
+
+function repairDataStructureReferencesInStacks(stacks: ScriptStack[], structures: DataStructureDef[]) {
+  return stacks.map((stack) => ({ ...stack, blocks: repairDataStructureReferencesInBlocks(stack.blocks, structures) }));
+}
+
 function cleanProjectName(value: unknown, fallback = "Projet Minitel") {
   if (typeof value !== "string") return fallback;
   const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
@@ -1652,6 +1757,7 @@ function parseProjectFile(contents: string): ParsedProjectFile {
   const projectSource = importedRecord(document.project) ?? document;
   if (!Array.isArray(projectSource.stacks)) throw new Error("Les blocs du projet sont absents.");
   const screenConfig = normalizeImportedScreenConfig(projectSource.screenConfig);
+  const dataStructures = normalizeDataStructures(projectSource.dataStructures);
   const importedStacks = projectSource.stacks.map(normalizeImportedStack).filter((stack): stack is ScriptStack => stack !== null);
   const hasScreenCollection = Array.isArray(projectSource.screens);
   const legacyElements = hasScreenCollection ? [] : normalizeImportedSceneElements(projectSource.sceneElements, screenConfig);
@@ -1674,11 +1780,13 @@ function parseProjectFile(contents: string): ParsedProjectFile {
   const activeScreenId = screens.some((screen) => screen.id === requestedActiveScreenId) ? requestedActiveScreenId : screens[0].id;
   const files = normalizeProjectAssets(projectSource.files);
   stacks = repairWebServerFileReferencesInStacks(stacks, files);
+  stacks = repairDataStructureReferencesInStacks(stacks, dataStructures);
   const requestedActiveFileId = typeof projectSource.activeFileId === "string" ? projectSource.activeFileId : "";
   const activeFileId = files.some((asset) => asset.id === requestedActiveFileId) ? requestedActiveFileId : files[0]?.id ?? "";
   const project: ProjectSnapshot = {
     stacks,
     variables: normalizeImportedVariables(projectSource.variables),
+    dataStructures,
     screenConfig,
     screens,
     activeScreenId,
@@ -1870,7 +1978,7 @@ function defaultProjectVariables() {
 
 function createScreenState(name = "Écran principal", elements: SceneElement[] = [], workspaceMode: WorkspaceMode = "blocks") {
   const screen = createMinitelScene(name, elements);
-  return { screens: [screen], activeScreenId: screen.id, files: [] as ProjectAsset[], activeFileId: "", workspaceMode };
+  return { screens: [screen], activeScreenId: screen.id, files: [] as ProjectAsset[], activeFileId: "", dataStructures: [] as DataStructureDef[], workspaceMode };
 }
 
 const projectExamples: ProjectExample[] = [
@@ -1922,6 +2030,7 @@ const projectExamples: ProjectExample[] = [
       return {
         stacks: [makeStack("event-setup", [drawScreen])],
         variables: defaultProjectVariables(),
+        dataStructures: [],
         screenConfig: config,
         screens: [screen],
         activeScreenId: screen.id,
@@ -1964,6 +2073,7 @@ function createNewProjectSnapshot(settings: NewProjectSettings): ProjectSnapshot
   return {
     stacks: createBlankStacks(),
     variables: createDefaultVariables(),
+    dataStructures: [],
     screenConfig,
     screens: [screen],
     activeScreenId: screen.id,
@@ -2315,6 +2425,9 @@ function repairVariableValues(
     if (input?.type === "query") {
       return [key, replaceQueryVariableReference(value, previousName, nextName)];
     }
+    if (key.startsWith(DATA_STRUCTURE_FIELD_TARGET_PREFIX) && value === previousName) {
+      return [key, nextName ?? ""];
+    }
     if (input?.type === "variable" && value === previousName) {
       const expectedType = input.variableType ?? "number";
       const compatibleVariables = expectedType === "any"
@@ -2487,12 +2600,13 @@ function appendHttpJsonRequestCode(
 ) {
   const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
   const queryEntries = queryEntriesFromValue(values.query);
+  const bodyExpression = "String(" + exprCode(values.body, textExpr("{}")) + ")";
   const requestExpression = (urlExpression: string) => method === "POST"
-    ? "mbsHttpPostJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
+    ? "mbsHttpPostJson(" + urlExpression + ", " + bodyExpression + ")"
     : method === "PUT"
-      ? "mbsHttpPutJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
+      ? "mbsHttpPutJson(" + urlExpression + ", " + bodyExpression + ")"
       : method === "PATCH"
-        ? "mbsHttpPatchJson(" + urlExpression + ", " + cppString(textValue(values.body, "{}")) + ")"
+        ? "mbsHttpPatchJson(" + urlExpression + ", " + bodyExpression + ")"
         : method === "DELETE"
           ? "mbsHttpDeleteJson(" + urlExpression + ")"
           : "mbsHttpGetJson(" + urlExpression + ")";
@@ -2832,6 +2946,60 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "http-delete-json":
         appendHttpJsonRequestCode(lines, indent, values, variables, "DELETE");
         break;
+      case "json-structure-build": {
+        const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+        const target = sanitizeIdentifier(textValue(values.target, "reponseJson"));
+        if (!structure) {
+          pushLine(lines, indent, "// Aucune structure de données sélectionnée.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "cJSON *mbsStructuredJson = cJSON_CreateObject();");
+        pushLine(lines, indent + 2, "if (mbsStructuredJson != nullptr) {");
+        structure.fields.forEach((field, fieldIndex) => {
+          const expression = dataStructureFieldExpression(values[dataStructureFieldValueKey(field.id)], field.valueType, variables);
+          if (field.valueType === "number") {
+            pushLine(lines, indent + 4, "cJSON_AddNumberToObject(mbsStructuredJson, " + cppString(field.key) + ", (double)(" + exprCode(expression, num(0)) + "));");
+          } else if (field.valueType === "boolean") {
+            pushLine(lines, indent + 4, "cJSON_AddBoolToObject(mbsStructuredJson, " + cppString(field.key) + ", (" + exprCode(expression, boolExpr(true)) + ") ? 1 : 0);");
+          } else if (field.valueType === "json") {
+            pushLine(lines, indent + 4, "String mbsStructuredRaw_" + fieldIndex + " = String(" + exprCode(expression, textExpr("{}")) + ");");
+            pushLine(lines, indent + 4, "cJSON *mbsStructuredItem_" + fieldIndex + " = cJSON_Parse(mbsStructuredRaw_" + fieldIndex + ".c_str());");
+            pushLine(lines, indent + 4, "if (mbsStructuredItem_" + fieldIndex + " == nullptr) mbsStructuredItem_" + fieldIndex + " = cJSON_CreateNull();");
+            pushLine(lines, indent + 4, "cJSON_AddItemToObject(mbsStructuredJson, " + cppString(field.key) + ", mbsStructuredItem_" + fieldIndex + ");");
+          } else {
+            pushLine(lines, indent + 4, "cJSON_AddStringToObject(mbsStructuredJson, " + cppString(field.key) + ", String(" + exprCode(expression, textExpr("")) + ").c_str());");
+          }
+        });
+        pushLine(lines, indent + 2, "}");
+        pushLine(lines, indent + 2, "char *mbsStructuredText = mbsStructuredJson != nullptr ? cJSON_PrintUnformatted(mbsStructuredJson) : nullptr;");
+        pushLine(lines, indent + 2, target + " = mbsStructuredText != nullptr ? String(mbsStructuredText) : String(\"{}\");");
+        pushLine(lines, indent + 2, "if (mbsStructuredText != nullptr) cJSON_free(mbsStructuredText);");
+        pushLine(lines, indent + 2, "if (mbsStructuredJson != nullptr) cJSON_Delete(mbsStructuredJson);");
+        pushLine(lines, indent, "}");
+        break;
+      }
+      case "json-structure-read": {
+        const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+        const sourceVariable = sanitizeIdentifier(textValue(values.source, "reponseJson"));
+        if (!structure) {
+          pushLine(lines, indent, "// Aucune structure de données sélectionnée.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "const String mbsStructuredSource = " + sourceVariable + ";");
+        structure.fields.forEach((field) => {
+          const targetName = dataStructureTargetName(values[dataStructureFieldTargetKey(field.id)], field, variables);
+          if (!targetName) {
+            pushLine(lines, indent + 2, "// Aucun emplacement compatible pour " + field.key + ".");
+            return;
+          }
+          const reader = field.valueType === "number" || field.valueType === "boolean" ? "mbsJsonReadNumber" : "mbsJsonReadText";
+          pushLine(lines, indent + 2, reader + "(mbsStructuredSource, " + cppString(field.key) + ", " + sanitizeIdentifier(targetName) + ");");
+        });
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "json-response-start": {
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
@@ -3031,7 +3199,7 @@ function appendEmbeddedWebAsset(lines: string[], asset: ProjectAsset, symbol: st
   lines.push("};", "static const size_t " + symbol + "Length = " + bytes.length + ";");
 }
 
-function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], projectFiles: ProjectAsset[]) {
+function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], dataStructures: DataStructureDef[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], projectFiles: ProjectAsset[]) {
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
@@ -3051,9 +3219,9 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], sc
   const webServerSymbols = Object.fromEntries(webServers.map((server, index) => [server.blockId, "mbsWebServer_" + index]));
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJsonResponse = JSON_RESPONSE_BLOCK_IDS.some((definitionId) => projectUsesBlock(stacks, definitionId));
-  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has"].some((definitionId) => projectUsesBlock(stacks, definitionId));
+  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has", "json-structure-build", "json-structure-read"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
-  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerGetStacks, jsonResponseEnabled: usesJsonResponse };
+  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerGetStacks, dataStructures, jsonResponseEnabled: usesJsonResponse };
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
@@ -3800,6 +3968,78 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         }
         break;
       }
+      case "json-structure-build": {
+        const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+        const target = textValue(values.target, "reponseJson");
+        if (!structure) {
+          state.variables[target] = "{}";
+          state.messages.push("Aucune structure de données");
+          break;
+        }
+        const body: Record<string, unknown> = {};
+        let invalidJsonFields = 0;
+        structure.fields.forEach((field) => {
+          const expression = dataStructureFieldExpression(values[dataStructureFieldValueKey(field.id)], field.valueType, context?.variables ?? []);
+          if (field.valueType === "number") {
+            body[field.key] = exprPreviewNumber(expression, state.variables, 0);
+          } else if (field.valueType === "boolean") {
+            body[field.key] = exprPreviewBoolean(expression, state.variables);
+          } else if (field.valueType === "json") {
+            try {
+              body[field.key] = JSON.parse(exprPreviewText(expression, state.variables, "{}")) as unknown;
+            } catch {
+              body[field.key] = null;
+              invalidJsonFields += 1;
+            }
+          } else {
+            body[field.key] = exprPreviewText(expression, state.variables);
+          }
+        });
+        state.variables[target] = JSON.stringify(body);
+        state.messages.push(structure.name + " → " + target + (invalidJsonFields > 0 ? " · JSON imbriqué invalide" : ""));
+        break;
+      }
+      case "json-structure-read": {
+        const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+        const sourceVariable = textValue(values.source, "reponseJson");
+        if (!structure) {
+          state.messages.push("Aucune structure de données");
+          break;
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(String(state.variables[sourceVariable] ?? "")) as unknown;
+        } catch {
+          state.messages.push("JSON invalide pour " + structure.name);
+          break;
+        }
+        const document = importedRecord(parsed);
+        if (!document) {
+          state.messages.push("Objet JSON attendu pour " + structure.name);
+          break;
+        }
+        let readFields = 0;
+        structure.fields.forEach((field) => {
+          const target = dataStructureTargetName(values[dataStructureFieldTargetKey(field.id)], field, context?.variables ?? []);
+          if (!target) return;
+          const found = Object.prototype.hasOwnProperty.call(document, field.key);
+          const fieldValue = document[field.key];
+          if (field.valueType === "number") {
+            const numericValue = Number(fieldValue);
+            state.variables[target] = found && Number.isFinite(numericValue) ? Math.trunc(numericValue) : 0;
+          } else if (field.valueType === "boolean") {
+            const booleanNumber = fieldValue === true ? 1 : fieldValue === false ? 0 : Number(fieldValue);
+            state.variables[target] = found && Number.isFinite(booleanNumber) ? Math.trunc(booleanNumber) : 0;
+          } else if (field.valueType === "json") {
+            state.variables[target] = found ? JSON.stringify(fieldValue) : "";
+          } else {
+            state.variables[target] = found ? previewJsonText(fieldValue) : "";
+          }
+          if (found) readFields += 1;
+        });
+        state.messages.push(structure.name + " lue · " + readFields + "/" + structure.fields.length + " champs");
+        break;
+      }
       case "json-response-start": {
         const response = context?.webResponse;
         if (response && !response.sent) {
@@ -3947,8 +4187,9 @@ function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], simulatedWebGets: SimulatedWebGet[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataStructures: DataStructureDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], simulatedWebGets: SimulatedWebGet[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
   const state = createPreviewState(variables, screenConfig);
+  const baseContext: PreviewExecutionContext = { dataStructures, variables };
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
@@ -3957,16 +4198,16 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
   const webServers = collectWebServers(stacks);
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
-  setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
+  setupStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, baseContext));
   for (let turn = 0; turn < loopCount; turn += 1) {
-    loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults));
+    loopStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, baseContext));
   }
 
   simulatedKeys.slice(-12).forEach((key) => {
     state.messages.push("Touche " + minitelKeyLabel(key));
     keyStacks
       .filter((stack) => stack.event.definitionId === "event-key-any" || previewKeyMatches(stack.event.values.key, key))
-      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens, httpResults));
+      .forEach((stack) => applyBlocksPreview(state, stack.blocks, key, screens, httpResults, 0, baseContext));
   });
 
   simulatedMqttMessages.slice(-12).forEach((message) => {
@@ -3978,7 +4219,7 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
     matchingStacks.forEach((stack) => {
       const target = textValue(stack.event.values.target, "").trim();
       if (target) state.variables[target] = message.payload;
-      applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults);
+      applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, baseContext);
     });
     if (matchingStacks.length === 0) state.messages.push("Aucun déclencheur pour ce topic");
   });
@@ -3986,7 +4227,7 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
   simulatedWebGets.slice(-12).forEach((request) => {
     const server = webServers.find((candidate) => candidate.referenceId === request.serverId);
     const path = normalizeWebServerPath(request.path);
-    const queryText = request.query.trim().replace(/^\?/, "");
+    const queryText = (request.query ?? "").trim().replace(/^\?/, "");
     const requestLabel = path + (queryText ? "?" + queryText : "");
     const query = parseSimulatedWebQuery(queryText);
     if (!server) {
@@ -4004,7 +4245,7 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], previe
       return;
     }
     const response: SimulatedJsonResponse = { body: {}, statusCode: 200, started: false, sent: false };
-    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { webResponse: response, webQuery: query }));
+    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { ...baseContext, webResponse: response, webQuery: query }));
     if (response.started || response.sent) {
       const body = JSON.stringify(response.body);
       const preview = body.length > 72 ? body.slice(0, 69) + "..." : body;
@@ -5188,12 +5429,83 @@ function DropTarget({
   );
 }
 
+function DataStructureBlockEditor({
+  block,
+  stackId,
+  variables,
+  structures,
+  onValueChange,
+}: {
+  block: ProgramBlock;
+  stackId: string;
+  variables: VariableDef[];
+  structures: DataStructureDef[];
+  onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
+}) {
+  const isBuild = block.definitionId === "json-structure-build";
+  const structure = resolveDataStructure(block.values.structureId, structures);
+  const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
+  const selectedTextVariable = (key: "source" | "target", fallback: string) => {
+    const requested = textValue(block.values[key], fallback);
+    return textVariables.some((variable) => variable.name === requested) ? requested : textVariables[0]?.name ?? "";
+  };
+
+  return (
+    <div className={"data-structure-block-editor " + (isBuild ? "is-build" : "is-read")} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
+      <div className="data-structure-block-toolbar">
+        <label><span>structure</span><select aria-label="Structure de données" value={structure?.id ?? ""} disabled={structures.length === 0} onChange={(event) => onValueChange(stackId, block.id, "structureId", event.target.value)}>
+          {structures.length === 0 ? <option value="">Aucune structure</option> : structures.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+        </select></label>
+        <label><span>{isBuild ? "JSON dans" : "JSON source"}</span><select aria-label={isBuild ? "Variable JSON de destination" : "Variable JSON source"} value={selectedTextVariable(isBuild ? "target" : "source", "reponseJson")} onChange={(event) => onValueChange(stackId, block.id, isBuild ? "target" : "source", event.target.value)}>
+          {textVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+        </select></label>
+      </div>
+      {structure ? (
+        <div className="data-structure-block-fields">
+          {structure.fields.map((field) => {
+            const valueKey = dataStructureFieldValueKey(field.id);
+            const targetKey = dataStructureFieldTargetKey(field.id);
+            const compatibleVariables = variables.filter((variable) => variableValueType(variable) === dataStructureFieldVariableType(field));
+            const targetName = dataStructureTargetName(
+              block.values[targetKey],
+              field,
+              variables,
+              isBuild ? [] : [selectedTextVariable("source", "reponseJson")],
+            );
+            return (
+              <div className="data-structure-block-field" key={field.id}>
+                <div className="data-structure-block-field-meta"><strong>{field.key}</strong><span>{dataStructureFieldTypeLabel(field.valueType)}</span></div>
+                {isBuild ? (
+                  <div className="data-structure-block-field-value">
+                    {field.valueType === "number" ? (
+                      <NumberExpressionEditor value={block.values[valueKey] ?? defaultDataStructureFieldExpression(field.valueType, variables)} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: valueKey }} onChange={(value) => onValueChange(stackId, block.id, valueKey, value)} />
+                    ) : field.valueType === "boolean" ? (
+                      <BooleanExpressionEditor value={block.values[valueKey] ?? defaultDataStructureFieldExpression(field.valueType, variables)} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: valueKey }} onChange={(value) => onValueChange(stackId, block.id, valueKey, value)} />
+                    ) : (
+                      <TextExpressionEditor value={block.values[valueKey] ?? defaultDataStructureFieldExpression(field.valueType, variables)} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: valueKey }} onChange={(value) => onValueChange(stackId, block.id, valueKey, value)} />
+                    )}
+                  </div>
+                ) : (
+                  <label className="data-structure-block-target"><span>dans</span><select aria-label={"Variable pour " + field.key} value={targetName} disabled={compatibleVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, targetKey, event.target.value)}>
+                    {compatibleVariables.length === 0 ? <option value="">Aucune variable</option> : compatibleVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+                  </select></label>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : <div className="data-structure-block-empty"><Braces size={15} /><span>Aucune structure</span></div>}
+    </div>
+  );
+}
+
 function BlockListView({
   blocks,
   stackId,
   ownerId,
   slot,
   variables,
+  dataStructures,
   screens,
   removingIds,
   motionIds,
@@ -5216,6 +5528,7 @@ function BlockListView({
   ownerId?: string;
   slot: DropLocation["slot"];
   variables: VariableDef[];
+  dataStructures: DataStructureDef[];
   screens: MinitelScene[];
   removingIds: Set<string>;
   motionIds: Record<string, MotionKind>;
@@ -5247,6 +5560,7 @@ function BlockListView({
             isFirst={index === 0}
             isLast={index === blocks.length - 1}
             variables={variables}
+            dataStructures={dataStructures}
             screens={screens}
             removingIds={removingIds}
             motionIds={motionIds}
@@ -5280,6 +5594,7 @@ function ProgramBlockView({
   isFirst,
   isLast,
   variables,
+  dataStructures,
   screens,
   removingIds,
   motionIds,
@@ -5305,6 +5620,7 @@ function ProgramBlockView({
   isFirst: boolean;
   isLast: boolean;
   variables: VariableDef[];
+  dataStructures: DataStructureDef[];
   screens: MinitelScene[];
   removingIds: Set<string>;
   motionIds: Record<string, MotionKind>;
@@ -5326,6 +5642,7 @@ function ProgramBlockView({
   const style = { "--block-color": definition.color } as BlockStyle;
   const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
   const isWebServer = definition.id === "web-server-start";
+  const isDataStructureBlock = definition.id === "json-structure-build" || definition.id === "json-structure-read";
   const webServerRoutes = isWebServer ? parseWebServerRoutes(block.values.assets) : [];
   const webServerName = isWebServer
     ? normalizeWebServerName(textValue(block.values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME
@@ -5409,6 +5726,7 @@ function ProgramBlockView({
               ))}
             </div>
           ) : null}
+          {isDataStructureBlock ? <DataStructureBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
           {isWebServer ? (
             <div className="web-server-block-summary">
               <Server size={14} />
@@ -5448,6 +5766,7 @@ function ProgramBlockView({
             ownerId={block.id}
             slot={slotDefinition.key}
             variables={variables}
+            dataStructures={dataStructures}
             screens={screens}
             removingIds={removingIds}
             motionIds={motionIds}
@@ -5695,6 +6014,7 @@ function App() {
   const saveInFlightRef = useRef<Promise<boolean> | null>(null);
   const [activeCategory, setActiveCategory] = useState("start");
   const [variables, setVariables] = useState<VariableDef[]>(() => initialProject.variables);
+  const [dataStructures, setDataStructures] = useState<DataStructureDef[]>(() => initialProject.dataStructures);
   const [stacks, setStacks] = useState<ScriptStack[]>(() => initialProject.stacks);
   const [screenConfig, setScreenConfig] = useState<MinitelScreenConfig>(() => initialProject.screenConfig);
   const [screens, setScreens] = useState<MinitelScene[]>(() => initialProject.screens);
@@ -5739,6 +6059,7 @@ function App() {
   const dragPreviewElementRef = useRef<HTMLDivElement | null>(null);
   const activeDropKeyRef = useRef("");
   const activeExpressionDropElementRef = useRef<HTMLElement | null>(null);
+  const paletteListRef = useRef<HTMLDivElement | null>(null);
   const [board, setBoard] = useState("esp32dev");
   const [uploadPort, setUploadPort] = useState("");
   const [serialPorts, setSerialPorts] = useState<SerialPortInfo[]>([]);
@@ -5794,14 +6115,18 @@ function App() {
   const selectedWebPreviewServer = webServers.find((server) => server.referenceId === webPreviewServerId) ?? webServers[0];
   const hasMqttMessageEvent = stacks.some((stack) => stack.event.definitionId === "event-mqtt-message");
   const hasWebServerGetEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-get");
-  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, screenConfig, screens, projectFiles), [projectFiles, screenConfig, screens, stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, screenConfig, screens, simulationHttpResults), [screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, simulationHttpResults]);
+  const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, dataStructures, screenConfig, screens, projectFiles), [dataStructures, projectFiles, screenConfig, screens, stacks, variables]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, dataStructures, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, screenConfig, screens, simulationHttpResults), [dataStructures, screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
   }), [currentProject?.createdAt, currentProject?.name]);
-  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata) : "", [activeFileId, activeScreenId, board, currentMetadata, currentProject, projectFiles, screenConfig, screens, stacks, variables, workspaceMode]);
+  const currentSignature = useMemo(() => currentProject ? projectSnapshotSignature({ stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata) : "", [activeFileId, activeScreenId, board, currentMetadata, currentProject, dataStructures, projectFiles, screenConfig, screens, stacks, variables, workspaceMode]);
   const projectDirty = Boolean(currentProject && currentSignature !== lastSavedSignatureRef.current);
+
+  useEffect(() => {
+    if (paletteListRef.current) paletteListRef.current.scrollTop = 0;
+  }, [activeCategory]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -6100,7 +6425,7 @@ function App() {
   }
 
   function pushHistory() {
-    const snapshot = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
+    const snapshot = cloneProjectSnapshot({ stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
     setHistory((current) => {
       const last = current.past[current.past.length - 1];
       if (last && JSON.stringify(last) === JSON.stringify(snapshot)) {
@@ -6150,6 +6475,7 @@ function App() {
     clearPendingDeletes();
     setStacks(next.stacks);
     setVariables(next.variables);
+    setDataStructures(next.dataStructures);
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
@@ -6168,7 +6494,7 @@ function App() {
   function undo() {
     if (history.past.length === 0) return;
     const previous = history.past[history.past.length - 1];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
+    const now = cloneProjectSnapshot({ stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
     setHistory({ past: history.past.slice(0, -1), future: [now, ...history.future].slice(0, HISTORY_LIMIT) });
     restoreSnapshot(previous);
     flashNotice("Retour en arrière");
@@ -6177,7 +6503,7 @@ function App() {
   function redo() {
     if (history.future.length === 0) return;
     const next = history.future[0];
-    const now = cloneProjectSnapshot({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
+    const now = cloneProjectSnapshot({ stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode });
     setHistory({ past: [...history.past.slice(-HISTORY_LIMIT + 1), now], future: history.future.slice(1) });
     restoreSnapshot(next);
     flashNotice("Action rétablie");
@@ -6500,6 +6826,22 @@ function App() {
     if (definitionId === "http-put-json") block.values.url = testServer.endpoints.put;
     if (definitionId === "http-patch-json") block.values.url = testServer.endpoints.patch;
     if (definitionId === "http-delete-json") block.values.url = testServer.endpoints.delete;
+    if (definitionId === "json-structure-build" || definitionId === "json-structure-read") {
+      const structure = dataStructures[0];
+      block.values.structureId = structure?.id ?? "";
+      structure?.fields.forEach((field) => {
+        if (definitionId === "json-structure-build") {
+          block.values[dataStructureFieldValueKey(field.id)] = defaultDataStructureFieldExpression(field.valueType, variables);
+        } else {
+          block.values[dataStructureFieldTargetKey(field.id)] = dataStructureTargetName(
+            undefined,
+            field,
+            variables,
+            [textValue(block.values.source, "reponseJson")],
+          );
+        }
+      });
+    }
     blockById[definitionId]?.inputs?.forEach((input) => {
       if (input.type !== "variable") return;
       const compatibleVariables = input.variableType === "any"
@@ -6834,6 +7176,7 @@ function App() {
     pushHistory();
     setStacks(nextStacks);
     setVariables(createDefaultVariables());
+    setDataStructures([]);
     setScreenConfig(createDefaultScreenConfig());
     setScreens([nextScreen]);
     setActiveScreenId(nextScreen.id);
@@ -6857,6 +7200,7 @@ function App() {
     pushHistory();
     setStacks(next.stacks);
     setVariables(next.variables);
+    setDataStructures(next.dataStructures);
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
@@ -6903,6 +7247,25 @@ function App() {
 
   function changeActiveFile(fileId: string) {
     setActiveFileId(fileId);
+  }
+
+  function saveDataStructure(structure: DataStructureDef) {
+    const exists = dataStructures.some((item) => item.id === structure.id);
+    pushHistory();
+    setDataStructures((current) => exists
+      ? current.map((item) => item.id === structure.id ? structure : item)
+      : [...current, structure]);
+    flashNotice(exists ? "Structure mise à jour" : "Structure créée");
+  }
+
+  function removeDataStructure(id: string) {
+    const structure = dataStructures.find((item) => item.id === id);
+    if (!structure) return;
+    const nextStructures = dataStructures.filter((item) => item.id !== id);
+    pushHistory();
+    setDataStructures(nextStructures);
+    setStacks((current) => repairDataStructureReferencesInStacks(current, nextStructures));
+    flashNotice("Structure supprimée");
   }
 
   function addVariable() {
@@ -7019,6 +7382,7 @@ function App() {
     finishDrag();
     setStacks(next.stacks);
     setVariables(next.variables);
+    setDataStructures(next.dataStructures);
     setScreenConfig(next.screenConfig);
     setScreens(next.screens);
     setActiveScreenId(next.activeScreenId);
@@ -7119,7 +7483,7 @@ function App() {
   function saveProject({ quiet = false }: { quiet?: boolean } = {}): Promise<boolean> {
     if (!currentProject) return Promise.resolve(false);
     if (saveInFlightRef.current) return saveInFlightRef.current;
-    const snapshot = { stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode };
+    const snapshot = { stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode };
     const metadata = { name: currentProject.name, createdAt: currentProject.createdAt };
     const operation = (async () => {
       setLibraryBusy(true);
@@ -7160,7 +7524,7 @@ function App() {
   async function exportProjectFile() {
     if (!currentProject) return;
     const suggestedName = cleanProjectName(currentProject.name).replace(/\s+/g, "-") + ".mbs";
-    const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata);
+    const contents = serializeProjectFile({ stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata);
     try {
       if (window.minitelStudio?.exportProject) {
         const result = await window.minitelStudio.exportProject({ suggestedName, contents });
@@ -7360,7 +7724,7 @@ function App() {
     }
     const handleBeforeUnload = () => {
       if (!autoSaveEnabled || appView !== "studio" || !currentProject || !projectDirty) return;
-      const contents = serializeProjectFile({ stacks, variables, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata);
+      const contents = serializeProjectFile({ stacks, variables, dataStructures, screenConfig, screens, activeScreenId, files: projectFiles, activeFileId, workspaceMode }, board, currentMetadata);
       const records = readBrowserProjectRecords().filter((record) => record.id !== currentProject.id);
       records.push({ id: currentProject.id, contents, modifiedAt: new Date().toISOString() });
       writeBrowserProjectRecords(records);
@@ -7468,8 +7832,11 @@ function App() {
                 );
               })}
             </div>
-            <div className="palette-list">
-              {activeCategory === "variables" ? <VariableManager variables={variables} onAdd={addVariable} onChange={changeVariable} onRemove={removeVariable} /> : null}
+            <div className="palette-list" ref={paletteListRef}>
+              {activeCategory === "variables" ? (<>
+                <VariableManager variables={variables} onAdd={addVariable} onChange={changeVariable} onRemove={removeVariable} />
+                <DataStructureManager structures={dataStructures} onSave={saveDataStructure} onRemove={removeDataStructure} />
+              </>) : null}
               {activeCategory === "operators" ? <div className="operator-shelf"><Sigma size={18} /><span>Nombres, hasard et conditions</span></div> : null}
               {activeBlocks.map((definition) => <PaletteBlock definition={definition} isDragging={draggingPaletteId === definition.id} onQuickAdd={quickAddDefinition} onPaletteDragStart={beginPaletteDrag} onPalettePointerDown={preparePalettePointerDrag} onDragMove={moveDragPreview} onDragEnd={finishDrag} key={definition.id} />)}
             </div>
@@ -7496,7 +7863,7 @@ function App() {
               {stacks.map((stack) => (
                 <section className={"script-stack " + (activeStackId === stack.id ? "selected " : "") + (removingStacks.has(stack.id) ? "deleting " : "") + (draggingStackId === stack.id ? "dragging" : "")} key={stack.id} onClick={() => setSelectedStackId(stack.id)}>
                   <EventHeader stack={stack} variables={variables} webServers={webServers} onEventValueChange={updateEventValue} onDeleteStack={deleteStack} onStackPointerDown={prepareStackPointerDrag} />
-                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} screens={screens} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onConfigure={openWebServerConfiguration} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
+                  <BlockListView blocks={stack.blocks} stackId={stack.id} slot="root" variables={variables} dataStructures={dataStructures} screens={screens} removingIds={removingIds} motionIds={motionIds} draggingBlockId={draggingBlockId} activeDropKey={activeDropKey} onConfigure={openWebServerConfiguration} onDropBranch={handleDropBranch} onValueChange={updateBlockValue} onDelete={deleteBlock} onDuplicate={duplicateBlock} onMove={moveBlock} onDragStartBlock={beginWorkspaceDrag} onBlockPointerDown={prepareWorkspacePointerDrag} onDragMove={moveDragPreview} onActivateDrop={activateDropLocation} onDragEndBlock={finishDrag} />
                 </section>
               ))}
             </div>

@@ -417,6 +417,7 @@ type SimulatedWebGet = {
 type SimulatedJsonResponse = {
   body: Record<string, unknown>;
   statusCode: number;
+  statusSet: boolean;
   started: boolean;
   sent: boolean;
 };
@@ -468,6 +469,8 @@ type CodeContext = {
   webServerGetStacks?: ScriptStack[];
   webResponseJsonVariable?: string;
   webResponseSentVariable?: string;
+  webResponseStatusVariable?: string;
+  webResponseStatusSetVariable?: string;
   webResponseServerSymbol?: string;
   webRequestServerSymbol?: string;
   dataStructures?: DataStructureDef[];
@@ -1076,6 +1079,7 @@ const HTTP_BLOCK_COLOR = "#b75238";
 const WEB_SERVER_BLOCK_COLOR = "#3f7f64";
 const JSON_BLOCK_COLOR = "#6f5bd5";
 const JSON_RESPONSE_BLOCK_IDS = [
+  "web-response-status",
   "json-response-start",
   "json-response-add-text",
   "json-response-add-number",
@@ -1230,6 +1234,9 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "web-get-query-if", title: "si le paramètre GET existe", help: "Exécute les blocs internes uniquement lorsque la requête contient ce paramètre.", kind: "control", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
   ], slots: [{ key: "children", label: "alors" }] },
+  { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+    { key: "status", label: "code", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
+  ] },
   { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
     { key: "port", label: "port", type: "number", defaultValue: num(1883), min: 1, max: 65535, compact: true },
@@ -1302,8 +1309,8 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "key", label: "clé", type: "text-value", defaultValue: textExpr("données") },
     { key: "value", label: "JSON", type: "text-value", defaultValue: textExpr("{}") },
   ] },
-  { id: "json-response-send", title: "envoyer la réponse JSON", help: "Envoie l'objet JSON au navigateur avec le code HTTP choisi. Sans ce bloc, une réponse 200 est envoyée automatiquement.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
-    { key: "status", label: "code HTTP", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
+  { id: "json-response-send", title: "envoyer la réponse JSON", help: "Envoie l'objet JSON avec le code défini par le bloc HTTP, ou 200 par défaut. Sans ce bloc, la réponse est envoyée automatiquement.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
+    { key: "status", label: "ancien code HTTP", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true, hidden: true },
   ] },
   { id: "json-read-text", title: "lire texte du JSON", help: "Lit une clé dans le JSON. Utilise un chemin comme utilisateur.nom ou objets.0.titre.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
     { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text" },
@@ -2806,22 +2813,26 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
           if (context?.jsonResponseEnabled) {
             requestContext.webResponseJsonVariable = "mbsWebResponseJson";
             requestContext.webResponseSentVariable = "mbsWebResponseSent";
+            requestContext.webResponseStatusVariable = "mbsWebResponseStatus";
+            requestContext.webResponseStatusSetVariable = "mbsWebResponseStatusSet";
             requestContext.webResponseServerSymbol = serverSymbol;
           }
           pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(path) + ", HTTP_GET, []() {");
           if (context?.jsonResponseEnabled) {
             pushLine(lines, indent + 4, "cJSON *mbsWebResponseJson = nullptr;");
             pushLine(lines, indent + 4, "bool mbsWebResponseSent = false;");
+            pushLine(lines, indent + 4, "int mbsWebResponseStatus = 200;");
+            pushLine(lines, indent + 4, "bool mbsWebResponseStatusSet = false;");
           }
           routeStacks.forEach((stack) => appendBlockCode(lines, stack.blocks, indent + 4, variables, requestContext));
           if (context?.jsonResponseEnabled) {
             pushLine(lines, indent + 4, "if (!mbsWebResponseSent) {");
             pushLine(lines, indent + 6, "if (mbsWebResponseJson != nullptr) {");
             pushLine(lines, indent + 8, "char *mbsWebResponseBody = cJSON_PrintUnformatted(mbsWebResponseJson);");
-            pushLine(lines, indent + 8, serverSymbol + "->send(200, \"application/json; charset=utf-8\", mbsWebResponseBody != nullptr ? mbsWebResponseBody : \"{}\");");
+            pushLine(lines, indent + 8, serverSymbol + "->send(mbsWebResponseStatus, \"application/json; charset=utf-8\", mbsWebResponseBody != nullptr ? mbsWebResponseBody : \"{}\");");
             pushLine(lines, indent + 8, "if (mbsWebResponseBody != nullptr) cJSON_free(mbsWebResponseBody);");
             pushLine(lines, indent + 6, "} else {");
-            pushLine(lines, indent + 8, serverSymbol + "->send(204, \"text/plain\", \"\");");
+            pushLine(lines, indent + 8, serverSymbol + "->send(mbsWebResponseStatusSet ? mbsWebResponseStatus : 204, \"text/plain\", \"\");");
             pushLine(lines, indent + 6, "}");
             pushLine(lines, indent + 4, "}");
             pushLine(lines, indent + 4, "if (mbsWebResponseJson != nullptr) cJSON_Delete(mbsWebResponseJson);");
@@ -3000,6 +3011,22 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "web-response-status": {
+        const responseSent = context?.webResponseSentVariable;
+        const responseStatus = context?.webResponseStatusVariable;
+        const responseStatusSet = context?.webResponseStatusSetVariable;
+        if (!responseSent || !responseStatus || !responseStatusSet) {
+          pushLine(lines, indent, "// Ce bloc de code HTTP doit être placé sous un départ GET.");
+          break;
+        }
+        pushLine(lines, indent, "if (!" + responseSent + ") {");
+        pushLine(lines, indent + 2, "int mbsRequestedResponseStatus = (int)(" + exprCode(values.status, num(200)) + ");");
+        pushLine(lines, indent + 2, "if (mbsRequestedResponseStatus < 100 || mbsRequestedResponseStatus > 599) mbsRequestedResponseStatus = 200;");
+        pushLine(lines, indent + 2, responseStatus + " = mbsRequestedResponseStatus;");
+        pushLine(lines, indent + 2, responseStatusSet + " = true;");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "json-response-start": {
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
@@ -3056,17 +3083,22 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
       case "json-response-send": {
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
+        const responseStatus = context?.webResponseStatusVariable;
+        const responseStatusSet = context?.webResponseStatusSetVariable;
         const serverSymbol = context?.webResponseServerSymbol;
-        if (!responseJson || !responseSent || !serverSymbol) {
+        if (!responseJson || !responseSent || !responseStatus || !responseStatusSet || !serverSymbol) {
           pushLine(lines, indent, "// Ce bloc d'envoi JSON doit être placé sous un départ GET.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
-        pushLine(lines, indent + 2, "int mbsWebResponseStatus = (int)(" + exprCode(values.status, num(200)) + ");");
-        pushLine(lines, indent + 2, "if (mbsWebResponseStatus < 100 || mbsWebResponseStatus > 599) mbsWebResponseStatus = 200;");
+        pushLine(lines, indent + 2, "if (!" + responseStatusSet + ") {");
+        pushLine(lines, indent + 4, responseStatus + " = (int)(" + exprCode(values.status, num(200)) + ");");
+        pushLine(lines, indent + 4, "if (" + responseStatus + " < 100 || " + responseStatus + " > 599) " + responseStatus + " = 200;");
+        pushLine(lines, indent + 4, responseStatusSet + " = true;");
+        pushLine(lines, indent + 2, "}");
         pushLine(lines, indent + 2, "if (" + responseJson + " == nullptr) " + responseJson + " = cJSON_CreateObject();");
         pushLine(lines, indent + 2, "char *mbsWebResponseBody = " + responseJson + " != nullptr ? cJSON_PrintUnformatted(" + responseJson + ") : nullptr;");
-        pushLine(lines, indent + 2, serverSymbol + "->send(mbsWebResponseStatus, \"application/json; charset=utf-8\", mbsWebResponseBody != nullptr ? mbsWebResponseBody : \"{}\");");
+        pushLine(lines, indent + 2, serverSymbol + "->send(" + responseStatus + ", \"application/json; charset=utf-8\", mbsWebResponseBody != nullptr ? mbsWebResponseBody : \"{}\");");
         pushLine(lines, indent + 2, "if (mbsWebResponseBody != nullptr) cJSON_free(mbsWebResponseBody);");
         pushLine(lines, indent + 2, responseSent + " = true;");
         pushLine(lines, indent, "}");
@@ -4040,11 +4072,19 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         state.messages.push(structure.name + " lue · " + readFields + "/" + structure.fields.length + " champs");
         break;
       }
+      case "web-response-status": {
+        const response = context?.webResponse;
+        if (response && !response.sent) {
+          const statusCode = Math.round(exprPreviewNumber(values.status, state.variables, 200));
+          response.statusCode = statusCode >= 100 && statusCode <= 599 ? statusCode : 200;
+          response.statusSet = true;
+        }
+        break;
+      }
       case "json-response-start": {
         const response = context?.webResponse;
         if (response && !response.sent) {
           response.body = {};
-          response.statusCode = 200;
           response.started = true;
         }
         break;
@@ -4092,8 +4132,11 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
       case "json-response-send": {
         const response = context?.webResponse;
         if (response && !response.sent) {
-          const statusCode = Math.round(exprPreviewNumber(values.status, state.variables, 200));
-          response.statusCode = statusCode >= 100 && statusCode <= 599 ? statusCode : 200;
+          if (!response.statusSet) {
+            const statusCode = Math.round(exprPreviewNumber(values.status, state.variables, 200));
+            response.statusCode = statusCode >= 100 && statusCode <= 599 ? statusCode : 200;
+            response.statusSet = true;
+          }
           response.started = true;
           response.sent = true;
         }
@@ -4150,6 +4193,7 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         break;
     }
   });
+  return context?.webResponse;
 }
 
 function mosaicPreviewCharacter(element: SceneImageElement, cellX: number, cellY: number) {
@@ -4244,12 +4288,16 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataSt
       state.messages.push("Aucun déclencheur GET pour ce chemin");
       return;
     }
-    const response: SimulatedJsonResponse = { body: {}, statusCode: 200, started: false, sent: false };
-    matchingStacks.forEach((stack) => applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { ...baseContext, webResponse: response, webQuery: query }));
+    let response: SimulatedJsonResponse = { body: {}, statusCode: 200, statusSet: false, started: false, sent: false };
+    matchingStacks.forEach((stack) => {
+      response = applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { ...baseContext, webResponse: response, webQuery: query }) ?? response;
+    });
     if (response.started || response.sent) {
       const body = JSON.stringify(response.body);
       const preview = body.length > 72 ? body.slice(0, 69) + "..." : body;
       state.messages.push("JSON " + response.statusCode + " · " + preview);
+    } else if (response.statusSet) {
+      state.messages.push("Réponse " + response.statusCode + " · vide");
     } else {
       state.messages.push("Réponse 204 · vide");
     }

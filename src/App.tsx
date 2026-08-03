@@ -416,6 +416,8 @@ type SimulatedWebGet = {
 
 type SimulatedJsonResponse = {
   body: Record<string, unknown>;
+  contentType: "json" | "text";
+  textBody: string;
   statusCode: number;
   statusSet: boolean;
   started: boolean;
@@ -582,6 +584,13 @@ function dataStructureFieldTargetKey(fieldId: string) {
 function resolveDataStructure(value: InputValue | undefined, structures: DataStructureDef[]) {
   const requestedId = textValue(value, "").trim();
   return structures.find((structure) => structure.id === requestedId) ?? structures[0];
+}
+
+type HttpResponseMode = "text" | "variable" | "structure";
+
+function httpResponseMode(value: InputValue | undefined): HttpResponseMode {
+  const requestedMode = textValue(value, "text");
+  return requestedMode === "variable" || requestedMode === "structure" ? requestedMode : "text";
 }
 
 function dataStructureFieldExpression(value: InputValue | undefined, valueType: DataStructureFieldType, variables: VariableDef[]): Expr {
@@ -1080,6 +1089,7 @@ const WEB_SERVER_BLOCK_COLOR = "#3f7f64";
 const JSON_BLOCK_COLOR = "#6f5bd5";
 const JSON_RESPONSE_BLOCK_IDS = [
   "web-response-status",
+  "web-response-send",
   "json-response-start",
   "json-response-add-text",
   "json-response-add-number",
@@ -1236,6 +1246,16 @@ const blockDefinitions: BlockDefinition[] = [
   ], slots: [{ key: "children", label: "alors" }] },
   { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "status", label: "code", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
+  ] },
+  { id: "web-response-send", title: "envoyer une réponse HTTP", help: "Répond à la requête GET avec un texte, une variable ou une structure convertie automatiquement en JSON.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+    { key: "mode", label: "contenu", type: "select", defaultValue: "text", options: [
+      { label: "Texte", value: "text" },
+      { label: "Variable", value: "variable" },
+      { label: "Structure", value: "structure" },
+    ], hidden: true },
+    { key: "text", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour"), hidden: true },
+    { key: "variable", label: "variable", type: "variable", defaultValue: "texte", variableType: "any", hidden: true },
+    { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
   ] },
   { id: "mqtt-connect", title: "se connecter au broker MQTT", help: "Connecte l'ESP32 à un broker MQTT. Place ce bloc après la connexion Wi-Fi.", kind: "action", category: "network", color: MQTT_BLOCK_COLOR, inputs: [
     { key: "host", label: "broker", type: "text", defaultValue: "broker.hivemq.com", placeholder: "broker.exemple.com" },
@@ -1520,7 +1540,7 @@ function normalizeImportedBlock(value: unknown): ProgramBlock | null {
     values.serverId = textValue(values.serverId, "").trim().slice(0, 120) || importedId || id;
   }
   const importedValues = importedRecord(source?.values);
-  if (definition.id === "json-structure-build" && importedValues) {
+  if ((definition.id === "json-structure-build" || definition.id === "web-response-send") && importedValues) {
     Object.entries(importedValues).forEach(([key, importedValue]) => {
       if (!key.startsWith(DATA_STRUCTURE_FIELD_VALUE_PREFIX) || key.length > 220) return;
       const expression = importedRecord(importedValue);
@@ -1712,7 +1732,7 @@ function repairDataStructureReferencesInBlocks(blocks: ProgramBlock[], structure
   const validIds = new Set(structures.map((structure) => structure.id));
   const fallbackId = structures[0]?.id ?? "";
   return blocks.map((block) => {
-    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read";
+    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read" || block.definitionId === "web-response-send";
     const requestedId = textValue(block.values.structureId, "");
     return {
       ...block,
@@ -3027,6 +3047,59 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
+      case "web-response-send": {
+        const responseSent = context?.webResponseSentVariable;
+        const responseStatus = context?.webResponseStatusVariable;
+        const responseStatusSet = context?.webResponseStatusSetVariable;
+        const serverSymbol = context?.webResponseServerSymbol;
+        if (!responseSent || !responseStatus || !responseStatusSet || !serverSymbol) {
+          pushLine(lines, indent, "// Ce bloc de réponse HTTP doit être placé sous un départ GET.");
+          break;
+        }
+        const mode = httpResponseMode(values.mode);
+        pushLine(lines, indent, "if (!" + responseSent + ") {");
+        pushLine(lines, indent + 2, "if (!" + responseStatusSet + ") {");
+        pushLine(lines, indent + 4, responseStatus + " = 200;");
+        pushLine(lines, indent + 4, responseStatusSet + " = true;");
+        pushLine(lines, indent + 2, "}");
+        if (mode === "structure") {
+          const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+          pushLine(lines, indent + 2, "cJSON *mbsHttpResponseJson = cJSON_CreateObject();");
+          if (!structure) pushLine(lines, indent + 2, "// Aucune structure sélectionnée : un objet JSON vide est envoyé.");
+          pushLine(lines, indent + 2, "if (mbsHttpResponseJson != nullptr) {");
+          (structure?.fields ?? []).forEach((field, fieldIndex) => {
+            const expression = dataStructureFieldExpression(values[dataStructureFieldValueKey(field.id)], field.valueType, variables);
+            if (field.valueType === "number") {
+              pushLine(lines, indent + 4, "cJSON_AddNumberToObject(mbsHttpResponseJson, " + cppString(field.key) + ", (double)(" + exprCode(expression, num(0)) + "));");
+            } else if (field.valueType === "boolean") {
+              pushLine(lines, indent + 4, "cJSON_AddBoolToObject(mbsHttpResponseJson, " + cppString(field.key) + ", (" + exprCode(expression, boolExpr(true)) + ") ? 1 : 0);");
+            } else if (field.valueType === "json") {
+              pushLine(lines, indent + 4, "String mbsHttpResponseRaw_" + fieldIndex + " = String(" + exprCode(expression, textExpr("{}")) + ");");
+              pushLine(lines, indent + 4, "cJSON *mbsHttpResponseItem_" + fieldIndex + " = cJSON_Parse(mbsHttpResponseRaw_" + fieldIndex + ".c_str());");
+              pushLine(lines, indent + 4, "if (mbsHttpResponseItem_" + fieldIndex + " == nullptr) mbsHttpResponseItem_" + fieldIndex + " = cJSON_CreateNull();");
+              pushLine(lines, indent + 4, "cJSON_AddItemToObject(mbsHttpResponseJson, " + cppString(field.key) + ", mbsHttpResponseItem_" + fieldIndex + ");");
+            } else {
+              pushLine(lines, indent + 4, "cJSON_AddStringToObject(mbsHttpResponseJson, " + cppString(field.key) + ", String(" + exprCode(expression, textExpr("")) + ").c_str());");
+            }
+          });
+          pushLine(lines, indent + 2, "}");
+          pushLine(lines, indent + 2, "char *mbsHttpResponseBody = mbsHttpResponseJson != nullptr ? cJSON_PrintUnformatted(mbsHttpResponseJson) : nullptr;");
+          pushLine(lines, indent + 2, serverSymbol + "->send(" + responseStatus + ", \"application/json; charset=utf-8\", mbsHttpResponseBody != nullptr ? mbsHttpResponseBody : \"{}\");");
+          pushLine(lines, indent + 2, "if (mbsHttpResponseBody != nullptr) cJSON_free(mbsHttpResponseBody);");
+          pushLine(lines, indent + 2, "if (mbsHttpResponseJson != nullptr) cJSON_Delete(mbsHttpResponseJson);");
+        } else {
+          const selectedVariableName = textValue(values.variable, "");
+          const selectedVariable = variables.find((variable) => variable.name === selectedVariableName) ?? variables[0];
+          const bodyCode = mode === "variable"
+            ? selectedVariable ? sanitizeIdentifier(selectedVariable.name) : cppString("")
+            : exprCode(values.text, textExpr("Bonjour"));
+          pushLine(lines, indent + 2, "String mbsHttpResponseBody = String(" + bodyCode + ");");
+          pushLine(lines, indent + 2, serverSymbol + "->send(" + responseStatus + ", \"text/plain; charset=utf-8\", mbsHttpResponseBody);");
+        }
+        pushLine(lines, indent + 2, responseSent + " = true;");
+        pushLine(lines, indent, "}");
+        break;
+      }
       case "json-response-start": {
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
@@ -4081,6 +4154,49 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         }
         break;
       }
+      case "web-response-send": {
+        const response = context?.webResponse;
+        if (!response || response.sent) break;
+        if (!response.statusSet) {
+          response.statusCode = 200;
+          response.statusSet = true;
+        }
+        const mode = httpResponseMode(values.mode);
+        if (mode === "structure") {
+          const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+          const body: Record<string, unknown> = {};
+          let invalidJsonFields = 0;
+          structure?.fields.forEach((field) => {
+            const expression = dataStructureFieldExpression(values[dataStructureFieldValueKey(field.id)], field.valueType, context?.variables ?? []);
+            if (field.valueType === "number") {
+              body[field.key] = exprPreviewNumber(expression, state.variables, 0);
+            } else if (field.valueType === "boolean") {
+              body[field.key] = exprPreviewBoolean(expression, state.variables);
+            } else if (field.valueType === "json") {
+              try {
+                body[field.key] = JSON.parse(exprPreviewText(expression, state.variables, "{}")) as unknown;
+              } catch {
+                body[field.key] = null;
+                invalidJsonFields += 1;
+              }
+            } else {
+              body[field.key] = exprPreviewText(expression, state.variables);
+            }
+          });
+          response.body = body;
+          response.contentType = "json";
+          if (!structure) state.messages.push("Aucune structure de données");
+          if (invalidJsonFields > 0) state.messages.push("JSON imbriqué invalide · remplacé par null");
+        } else {
+          response.textBody = mode === "variable"
+            ? String(state.variables[textValue(values.variable, "")] ?? "")
+            : exprPreviewText(values.text, state.variables, "Bonjour");
+          response.contentType = "text";
+        }
+        response.started = true;
+        response.sent = true;
+        break;
+      }
       case "json-response-start": {
         const response = context?.webResponse;
         if (response && !response.sent) {
@@ -4288,14 +4404,19 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataSt
       state.messages.push("Aucun déclencheur GET pour ce chemin");
       return;
     }
-    let response: SimulatedJsonResponse = { body: {}, statusCode: 200, statusSet: false, started: false, sent: false };
+    let response: SimulatedJsonResponse = { body: {}, contentType: "json", textBody: "", statusCode: 200, statusSet: false, started: false, sent: false };
     matchingStacks.forEach((stack) => {
       response = applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { ...baseContext, webResponse: response, webQuery: query }) ?? response;
     });
     if (response.started || response.sent) {
-      const body = JSON.stringify(response.body);
-      const preview = body.length > 72 ? body.slice(0, 69) + "..." : body;
-      state.messages.push("JSON " + response.statusCode + " · " + preview);
+      if (response.contentType === "text") {
+        const preview = response.textBody.length > 72 ? response.textBody.slice(0, 69) + "..." : response.textBody;
+        state.messages.push("HTTP " + response.statusCode + " · " + (preview || "texte vide"));
+      } else {
+        const body = JSON.stringify(response.body);
+        const preview = body.length > 72 ? body.slice(0, 69) + "..." : body;
+        state.messages.push("JSON " + response.statusCode + " · " + preview);
+      }
     } else if (response.statusSet) {
       state.messages.push("Réponse " + response.statusCode + " · vide");
     } else {
@@ -5547,6 +5668,81 @@ function DataStructureBlockEditor({
   );
 }
 
+function HttpResponseBlockEditor({
+  block,
+  stackId,
+  variables,
+  structures,
+  onValueChange,
+}: {
+  block: ProgramBlock;
+  stackId: string;
+  variables: VariableDef[];
+  structures: DataStructureDef[];
+  onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
+}) {
+  const mode = httpResponseMode(block.values.mode);
+  const structure = resolveDataStructure(block.values.structureId, structures);
+  const requestedVariable = textValue(block.values.variable, "");
+  const selectedVariable = variables.some((variable) => variable.name === requestedVariable) ? requestedVariable : variables[0]?.name ?? "";
+  const chooseMode = (nextMode: HttpResponseMode) => onValueChange(stackId, block.id, "mode", nextMode);
+
+  return (
+    <div className="http-response-block-editor" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
+      <div className="http-response-mode-switch" role="group" aria-label="Type de réponse HTTP">
+        <button type="button" className={mode === "text" ? "is-active" : ""} aria-pressed={mode === "text"} onClick={() => chooseMode("text")}><Type size={13} /><span>Texte</span></button>
+        <button type="button" className={mode === "variable" ? "is-active" : ""} aria-pressed={mode === "variable"} onClick={() => chooseMode("variable")}><Variable size={13} /><span>Variable</span></button>
+        <button type="button" className={mode === "structure" ? "is-active" : ""} aria-pressed={mode === "structure"} onClick={() => chooseMode("structure")}><Braces size={13} /><span>Structure</span></button>
+      </div>
+
+      <div className="http-response-content" key={mode}>
+        {mode === "text" ? (
+          <div className="http-response-value-row is-text">
+            <span>contenu</span>
+            <TextExpressionEditor value={block.values.text ?? textExpr("Bonjour")} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: "text" }} onChange={(value) => onValueChange(stackId, block.id, "text", value)} />
+          </div>
+        ) : mode === "variable" ? (
+          <label className="http-response-value-row">
+            <span>variable</span>
+            <select aria-label="Variable de la réponse HTTP" value={selectedVariable} disabled={variables.length === 0} onChange={(event) => onValueChange(stackId, block.id, "variable", event.target.value)}>
+              {variables.length === 0 ? <option value="">Aucune variable</option> : variables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name} · {variableValueType(variable) === "text" ? "Texte" : "Nombre"}</option>)}
+            </select>
+          </label>
+        ) : (
+          <div className="http-response-structure">
+            <div className="data-structure-block-toolbar http-response-structure-toolbar">
+              <label><span>structure</span><select aria-label="Structure de la réponse HTTP" value={structure?.id ?? ""} disabled={structures.length === 0} onChange={(event) => onValueChange(stackId, block.id, "structureId", event.target.value)}>
+                {structures.length === 0 ? <option value="">Aucune structure</option> : structures.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+              </select></label>
+            </div>
+            {structure ? (
+              <div className="data-structure-block-fields">
+                {structure.fields.map((field) => {
+                  const valueKey = dataStructureFieldValueKey(field.id);
+                  return (
+                    <div className="data-structure-block-field" key={field.id}>
+                      <div className="data-structure-block-field-meta"><strong>{field.key}</strong><span>{dataStructureFieldTypeLabel(field.valueType)}</span></div>
+                      <div className="data-structure-block-field-value">
+                        {field.valueType === "number" ? (
+                          <NumberExpressionEditor value={block.values[valueKey] ?? defaultDataStructureFieldExpression(field.valueType, variables)} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: valueKey }} onChange={(value) => onValueChange(stackId, block.id, valueKey, value)} />
+                        ) : field.valueType === "boolean" ? (
+                          <BooleanExpressionEditor value={block.values[valueKey] ?? defaultDataStructureFieldExpression(field.valueType, variables)} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: valueKey }} onChange={(value) => onValueChange(stackId, block.id, valueKey, value)} />
+                        ) : (
+                          <TextExpressionEditor value={block.values[valueKey] ?? defaultDataStructureFieldExpression(field.valueType, variables)} variables={variables} expressionOwner={{ owner: "block", stackId, blockId: block.id, inputKey: valueKey }} onChange={(value) => onValueChange(stackId, block.id, valueKey, value)} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <div className="data-structure-block-empty"><Braces size={15} /><span>Aucune structure</span></div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BlockListView({
   blocks,
   stackId,
@@ -5691,6 +5887,7 @@ function ProgramBlockView({
   const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
   const isWebServer = definition.id === "web-server-start";
   const isDataStructureBlock = definition.id === "json-structure-build" || definition.id === "json-structure-read";
+  const isHttpResponseBlock = definition.id === "web-response-send";
   const webServerRoutes = isWebServer ? parseWebServerRoutes(block.values.assets) : [];
   const webServerName = isWebServer
     ? normalizeWebServerName(textValue(block.values.name, DEFAULT_WEB_SERVER_NAME)) || DEFAULT_WEB_SERVER_NAME
@@ -5775,6 +5972,7 @@ function ProgramBlockView({
             </div>
           ) : null}
           {isDataStructureBlock ? <DataStructureBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
+          {isHttpResponseBlock ? <HttpResponseBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
           {isWebServer ? (
             <div className="web-server-block-summary">
               <Server size={14} />
@@ -6874,11 +7072,11 @@ function App() {
     if (definitionId === "http-put-json") block.values.url = testServer.endpoints.put;
     if (definitionId === "http-patch-json") block.values.url = testServer.endpoints.patch;
     if (definitionId === "http-delete-json") block.values.url = testServer.endpoints.delete;
-    if (definitionId === "json-structure-build" || definitionId === "json-structure-read") {
+    if (definitionId === "json-structure-build" || definitionId === "json-structure-read" || definitionId === "web-response-send") {
       const structure = dataStructures[0];
       block.values.structureId = structure?.id ?? "";
       structure?.fields.forEach((field) => {
-        if (definitionId === "json-structure-build") {
+        if (definitionId === "json-structure-build" || definitionId === "web-response-send") {
           block.values[dataStructureFieldValueKey(field.id)] = defaultDataStructureFieldExpression(field.valueType, variables);
         } else {
           block.values[dataStructureFieldTargetKey(field.id)] = dataStructureTargetName(

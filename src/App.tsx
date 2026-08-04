@@ -408,7 +408,10 @@ type SimulatedMqttMessage = {
   payload: string;
 };
 
-type SimulatedWebGet = {
+type WebRequestMethod = "GET" | "POST";
+
+type SimulatedWebRequest = {
+  method: WebRequestMethod;
   serverId: string;
   path: string;
   query: string;
@@ -468,7 +471,7 @@ type CodeContext = {
   webAssetSymbols?: Record<string, string>;
   webServers?: WebServerDescriptor[];
   webServerSymbols?: Record<string, string>;
-  webServerGetStacks?: ScriptStack[];
+  webServerRequestStacks?: ScriptStack[];
   webResponseJsonVariable?: string;
   webResponseSentVariable?: string;
   webResponseStatusVariable?: string;
@@ -1123,6 +1126,10 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "server", label: "serveur", type: "web-server", defaultValue: "", placeholder: "Serveur web" },
     { key: "path", label: "chemin", type: "text", defaultValue: "/api/bonjour", placeholder: "/api/bonjour" },
   ] },
+  { id: "event-web-server-post", title: "quand le serveur reçoit POST", help: "Pile exécutée lorsqu'une requête POST arrive sur le chemin choisi.", kind: "event", category: "start", color: "#ffb703", inputs: [
+    { key: "server", label: "serveur", type: "web-server", defaultValue: "", placeholder: "Serveur web" },
+    { key: "path", label: "chemin", type: "text", defaultValue: "/api/message", placeholder: "/api/message" },
+  ] },
   { id: "event-mqtt-message", title: "quand un message MQTT est reçu", help: "Pile exécutée à la réception d'un message MQTT. Laisse le topic vide pour accepter tous les messages.", kind: "event", category: "start", color: "#ffb703", inputs: [
     { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
     { key: "target", label: "message dans", type: "variable", defaultValue: "texte", variableType: "text" },
@@ -1244,10 +1251,10 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "web-get-query-if", title: "si le paramètre GET existe", help: "Exécute les blocs internes uniquement lorsque la requête contient ce paramètre.", kind: "control", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
   ], slots: [{ key: "children", label: "alors" }] },
-  { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+  { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET ou POST.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "status", label: "code", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
   ] },
-  { id: "web-response-send", title: "envoyer une réponse HTTP", help: "Répond à la requête GET avec un texte, une variable ou une structure convertie automatiquement en JSON.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+  { id: "web-response-send", title: "envoyer une réponse HTTP", help: "Répond à la requête web avec un texte, une variable ou une structure convertie automatiquement en JSON.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "mode", label: "contenu", type: "select", defaultValue: "text", options: [
       { label: "Texte", value: "text" },
       { label: "Variable", value: "variable" },
@@ -1312,7 +1319,7 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
     { key: "source", label: "JSON", type: "variable", defaultValue: "reponseJson", variableType: "text", hidden: true },
   ] },
-  { id: "json-response-start", title: "commencer une réponse JSON", help: "Prépare un nouvel objet JSON pour répondre à la requête GET en cours.", kind: "action", category: "json", color: JSON_BLOCK_COLOR },
+  { id: "json-response-start", title: "commencer une réponse JSON", help: "Prépare un nouvel objet JSON pour répondre à la requête web en cours.", kind: "action", category: "json", color: JSON_BLOCK_COLOR },
   { id: "json-response-add-text", title: "ajouter un texte au JSON", help: "Ajoute un champ Texte à la réponse. La clé et la valeur acceptent les variables et les opérations Texte.", kind: "action", category: "json", color: JSON_BLOCK_COLOR, inputs: [
     { key: "key", label: "clé", type: "text-value", defaultValue: textExpr("message") },
     { key: "value", label: "texte", type: "text-value", defaultValue: textExpr("Bonjour") },
@@ -2537,6 +2544,12 @@ function resolveWebServer(value: InputValue | undefined, servers: WebServerDescr
   return servers.find((server) => server.referenceId === requestedId) ?? servers[0];
 }
 
+function webRequestMethodForEvent(definitionId: string): WebRequestMethod | null {
+  if (definitionId === "event-web-server-get") return "GET";
+  if (definitionId === "event-web-server-post") return "POST";
+  return null;
+}
+
 function projectUsesBlock(stacks: ScriptStack[], definitionId: string) {
   return stacks.some((stack) => {
     let found = false;
@@ -2810,14 +2823,17 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         }
         const files = context?.projectFiles ?? [];
         const symbols = context?.webAssetSymbols ?? {};
-        const eventRoutes = new Map<string, ScriptStack[]>();
-        (context?.webServerGetStacks ?? []).forEach((stack) => {
+        const eventRoutes = new Map<string, { method: WebRequestMethod; path: string; stacks: ScriptStack[] }>();
+        (context?.webServerRequestStacks ?? []).forEach((stack) => {
+          const method = webRequestMethodForEvent(stack.event.definitionId);
           const selectedServer = resolveWebServer(stack.event.values.server, context?.webServers ?? []);
-          if (selectedServer?.blockId !== block.id) return;
+          if (!method || selectedServer?.blockId !== block.id) return;
           const path = normalizeWebServerPath(textValue(stack.event.values.path, "/"));
-          eventRoutes.set(path, [...(eventRoutes.get(path) ?? []), stack]);
+          const routeKey = method + " " + path;
+          const existingRoute = eventRoutes.get(routeKey);
+          eventRoutes.set(routeKey, { method, path, stacks: [...(existingRoute?.stacks ?? []), stack] });
         });
-        const seenPaths = new Set<string>(eventRoutes.keys());
+        const seenPaths = new Set<string>(Array.from(eventRoutes.values()).filter((route) => route.method === "GET").map((route) => route.path));
         const routes = parseWebServerRoutes(values.assets).flatMap((route) => {
           const asset = files.find((item) => item.id === route.fileId);
           const symbol = symbols[route.fileId];
@@ -2828,7 +2844,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "// Serveur web : " + serverName);
         pushLine(lines, indent, "if (" + serverSymbol + " == nullptr) {");
         pushLine(lines, indent + 2, serverSymbol + " = new WebServer(" + port + ");");
-        eventRoutes.forEach((routeStacks, path) => {
+        eventRoutes.forEach(({ method, path, stacks: routeStacks }) => {
           const requestContext: CodeContext = { ...context, webRequestServerSymbol: serverSymbol };
           if (context?.jsonResponseEnabled) {
             requestContext.webResponseJsonVariable = "mbsWebResponseJson";
@@ -2837,7 +2853,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
             requestContext.webResponseStatusSetVariable = "mbsWebResponseStatusSet";
             requestContext.webResponseServerSymbol = serverSymbol;
           }
-          pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(path) + ", HTTP_GET, []() {");
+          pushLine(lines, indent + 2, serverSymbol + "->on(" + cppString(path) + ", HTTP_" + method + ", []() {");
           if (context?.jsonResponseEnabled) {
             pushLine(lines, indent + 4, "cJSON *mbsWebResponseJson = nullptr;");
             pushLine(lines, indent + 4, "bool mbsWebResponseSent = false;");
@@ -3036,7 +3052,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseStatus = context?.webResponseStatusVariable;
         const responseStatusSet = context?.webResponseStatusSetVariable;
         if (!responseSent || !responseStatus || !responseStatusSet) {
-          pushLine(lines, indent, "// Ce bloc de code HTTP doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce bloc de code HTTP doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
@@ -3053,7 +3069,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseStatusSet = context?.webResponseStatusSetVariable;
         const serverSymbol = context?.webResponseServerSymbol;
         if (!responseSent || !responseStatus || !responseStatusSet || !serverSymbol) {
-          pushLine(lines, indent, "// Ce bloc de réponse HTTP doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce bloc de réponse HTTP doit être placé sous un départ GET ou POST.");
           break;
         }
         const mode = httpResponseMode(values.mode);
@@ -3104,7 +3120,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce bloc de réponse JSON doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce bloc de réponse JSON doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
@@ -3117,7 +3133,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetText(" + responseJson + ", String(" + exprCode(values.key, textExpr("message")) + "), String(" + exprCode(values.value, textExpr("")) + "));");
@@ -3127,7 +3143,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetNumber(" + responseJson + ", String(" + exprCode(values.key, textExpr("valeur")) + "), (double)(" + exprCode(values.value, num(0)) + "));");
@@ -3137,7 +3153,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetBool(" + responseJson + ", String(" + exprCode(values.key, textExpr("actif")) + "), (bool)(" + exprCode(values.value, boolExpr(false)) + "));");
@@ -3147,7 +3163,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetRaw(" + responseJson + ", String(" + exprCode(values.key, textExpr("données")) + "), String(" + exprCode(values.value, textExpr("{}")) + "));");
@@ -3160,7 +3176,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseStatusSet = context?.webResponseStatusSetVariable;
         const serverSymbol = context?.webResponseServerSymbol;
         if (!responseJson || !responseSent || !responseStatus || !responseStatusSet || !serverSymbol) {
-          pushLine(lines, indent, "// Ce bloc d'envoi JSON doit être placé sous un départ GET.");
+          pushLine(lines, indent, "// Ce bloc d'envoi JSON doit être placé sous un départ GET ou POST.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
@@ -3309,7 +3325,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], da
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const mqttMessageStacks = stacks.filter((stack) => stack.event.definitionId === "event-mqtt-message");
-  const webServerGetStacks = stacks.filter((stack) => stack.event.definitionId === "event-web-server-get");
+  const webServerRequestStacks = stacks.filter((stack) => webRequestMethodForEvent(stack.event.definitionId) !== null);
   const webServers = collectWebServers(stacks);
   const variableTypes = collectVariableTypes(stacks, variables);
   const usesHttpPost = projectUsesBlock(stacks, "http-post-json");
@@ -3326,7 +3342,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], da
   const usesJsonResponse = JSON_RESPONSE_BLOCK_IDS.some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has", "json-structure-build", "json-structure-read"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
-  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerGetStacks, dataStructures, jsonResponseEnabled: usesJsonResponse };
+  const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerRequestStacks, dataStructures, jsonResponseEnabled: usesJsonResponse };
   const lines: string[] = [
     "#include <Arduino.h>",
     ...(usesWifi ? ["#include <WiFi.h>"] : []),
@@ -4347,14 +4363,14 @@ function applyScenePreview(state: PreviewState, elements: SceneElement[]) {
   });
 }
 
-function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataStructures: DataStructureDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], simulatedWebGets: SimulatedWebGet[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
+function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataStructures: DataStructureDef[], previewKey: string, simulationTick: number, simulatedKeys: string[], simulatedMqttMessages: SimulatedMqttMessage[], simulatedWebRequests: SimulatedWebRequest[], screenConfig: MinitelScreenConfig, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>) {
   const state = createPreviewState(variables, screenConfig);
   const baseContext: PreviewExecutionContext = { dataStructures, variables };
   const setupStacks = stacks.filter((stack) => stack.event.definitionId === "event-setup");
   const loopStacks = stacks.filter((stack) => stack.event.definitionId === "event-loop");
   const keyStacks = stacks.filter((stack) => stack.event.definitionId === "event-key-any" || stack.event.definitionId === "event-key-char");
   const mqttMessageStacks = stacks.filter((stack) => stack.event.definitionId === "event-mqtt-message");
-  const webServerGetStacks = stacks.filter((stack) => stack.event.definitionId === "event-web-server-get");
+  const webServerRequestStacks = stacks.filter((stack) => webRequestMethodForEvent(stack.event.definitionId) !== null);
   const webServers = collectWebServers(stacks);
   const loopCount = Math.max(1, Math.min(12, simulationTick + 1));
 
@@ -4384,24 +4400,24 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataSt
     if (matchingStacks.length === 0) state.messages.push("Aucun déclencheur pour ce topic");
   });
 
-  simulatedWebGets.slice(-12).forEach((request) => {
+  simulatedWebRequests.slice(-12).forEach((request) => {
     const server = webServers.find((candidate) => candidate.referenceId === request.serverId);
     const path = normalizeWebServerPath(request.path);
     const queryText = (request.query ?? "").trim().replace(/^\?/, "");
     const requestLabel = path + (queryText ? "?" + queryText : "");
     const query = parseSimulatedWebQuery(queryText);
     if (!server) {
-      state.messages.push("GET " + requestLabel + " · serveur introuvable");
+      state.messages.push(request.method + " " + requestLabel + " · serveur introuvable");
       return;
     }
-    const matchingStacks = webServerGetStacks.filter((stack) => {
+    const matchingStacks = webServerRequestStacks.filter((stack) => {
       const selectedServer = resolveWebServer(stack.event.values.server, webServers);
       const eventPath = normalizeWebServerPath(textValue(stack.event.values.path, "/"));
-      return selectedServer?.blockId === server.blockId && eventPath === path;
+      return webRequestMethodForEvent(stack.event.definitionId) === request.method && selectedServer?.blockId === server.blockId && eventPath === path;
     });
-    state.messages.push("GET " + requestLabel + " reçu · " + server.name);
+    state.messages.push(request.method + " " + requestLabel + " reçu · " + server.name);
     if (matchingStacks.length === 0) {
-      state.messages.push("Aucun déclencheur GET pour ce chemin");
+      state.messages.push("Aucun déclencheur " + request.method + " pour ce chemin");
       return;
     }
     let response: SimulatedJsonResponse = { body: {}, contentType: "json", textBody: "", statusCode: 200, statusSet: false, started: false, sent: false };
@@ -6290,10 +6306,11 @@ function App() {
   const [mqttPreviewTopic, setMqttPreviewTopic] = useState("minitel/messages");
   const [mqttPreviewPayload, setMqttPreviewPayload] = useState("Bonjour MQTT");
   const [simulatedMqttMessages, setSimulatedMqttMessages] = useState<SimulatedMqttMessage[]>([]);
+  const [webPreviewMethod, setWebPreviewMethod] = useState<WebRequestMethod>("GET");
   const [webPreviewServerId, setWebPreviewServerId] = useState("");
   const [webPreviewPath, setWebPreviewPath] = useState("/api/bonjour");
   const [webPreviewQuery, setWebPreviewQuery] = useState("exemple=5&test=ok");
-  const [simulatedWebGets, setSimulatedWebGets] = useState<SimulatedWebGet[]>([]);
+  const [simulatedWebRequests, setSimulatedWebRequests] = useState<SimulatedWebRequest[]>([]);
   const [simulationHttpResults, setSimulationHttpResults] = useState<Record<string, SimulationHttpState>>({});
   const simulationHttpGenerationRef = useRef(0);
   const simulationHttpPendingRef = useRef<Map<string, number>>(new Map());
@@ -6361,8 +6378,11 @@ function App() {
   const selectedWebPreviewServer = webServers.find((server) => server.referenceId === webPreviewServerId) ?? webServers[0];
   const hasMqttMessageEvent = stacks.some((stack) => stack.event.definitionId === "event-mqtt-message");
   const hasWebServerGetEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-get");
+  const hasWebServerPostEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-post");
+  const hasWebServerRequestEvent = hasWebServerGetEvent || hasWebServerPostEvent;
+  const selectedWebPreviewMethod: WebRequestMethod = webPreviewMethod === "POST" && hasWebServerPostEvent ? "POST" : hasWebServerGetEvent ? "GET" : "POST";
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, dataStructures, screenConfig, screens, projectFiles), [dataStructures, projectFiles, screenConfig, screens, stacks, variables]);
-  const preview = useMemo(() => simulatePreview(stacks, variables, dataStructures, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, screenConfig, screens, simulationHttpResults), [dataStructures, screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebGets, simulationHttpResults]);
+  const preview = useMemo(() => simulatePreview(stacks, variables, dataStructures, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebRequests, screenConfig, screens, simulationHttpResults), [dataStructures, screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebRequests, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
     name: currentProject?.name ?? "Projet Minitel",
     createdAt: currentProject?.createdAt ?? new Date(0).toISOString(),
@@ -6733,7 +6753,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
-    setSimulatedWebGets([]);
+    setSimulatedWebRequests([]);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)).slice(0, 40), "history-flash"), 0);
   }
 
@@ -6845,22 +6865,24 @@ function App() {
     flashNotice("Message MQTT simulé");
   }
 
-  function triggerSimulatedWebGet() {
+  function triggerSimulatedWebRequest() {
     if (!selectedWebPreviewServer) {
       flashNotice("Ajoute d'abord un bloc serveur web");
       return;
     }
+    const method = selectedWebPreviewMethod;
     const path = normalizeWebServerPath(webPreviewPath);
     const query = webPreviewQuery.trim().replace(/^\?/, "");
     const requestLabel = path + (query ? "?" + query : "");
     setRightTab("preview");
+    setWebPreviewMethod(method);
     setWebPreviewServerId(selectedWebPreviewServer.referenceId);
     setWebPreviewPath(path);
     setWebPreviewQuery(query);
-    setSimulatedWebGets((current) => [...current.slice(-11), { serverId: selectedWebPreviewServer.referenceId, path, query }]);
+    setSimulatedWebRequests((current) => [...current.slice(-11), { method, serverId: selectedWebPreviewServer.referenceId, path, query }]);
     setSimTick((current) => current + 1);
-    void refreshSimulationHttpResults(["event-setup", "event-loop", "event-web-server-get"]);
-    flashNotice("GET " + requestLabel + " simulé");
+    void refreshSimulationHttpResults(["event-setup", "event-loop", "event-web-server-" + method.toLowerCase()]);
+    flashNotice(method + " " + requestLabel + " simulé");
   }
 
   function resetSimulation() {
@@ -6868,7 +6890,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
-    setSimulatedWebGets([]);
+    setSimulatedWebRequests([]);
     clearSimulationHttpResults();
   }
 
@@ -7049,7 +7071,7 @@ function App() {
 
   function createStackFromEvent(eventDefinitionId: string) {
     const stack = makeStack(eventDefinitionId);
-    if (eventDefinitionId === "event-web-server-get") stack.event.values.server = webServers[0]?.referenceId ?? "";
+    if (webRequestMethodForEvent(eventDefinitionId)) stack.event.values.server = webServers[0]?.referenceId ?? "";
     pushHistory();
     setStacks((current) => [...current, stack]);
     setSelectedStackId(stack.id);
@@ -7434,7 +7456,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
-    setSimulatedWebGets([]);
+    setSimulatedWebRequests([]);
     window.setTimeout(() => animateBlock(collectBlockIds(nextStacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice("Nouveau programme");
   }
@@ -7458,7 +7480,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
-    setSimulatedWebGets([]);
+    setSimulatedWebRequests([]);
     setExamplesOpen(false);
     window.setTimeout(() => animateBlock(collectBlockIds(next.stacks.flatMap((stack) => stack.blocks)), "history-flash"), 0);
     flashNotice(example.name + " chargé");
@@ -7645,7 +7667,7 @@ function App() {
     setSimTick(0);
     setSimulatedKeys([]);
     setSimulatedMqttMessages([]);
-    setSimulatedWebGets([]);
+    setSimulatedWebRequests([]);
     setExamplesOpen(false);
     lastSavedSignatureRef.current = projectSnapshotSignature(next, parsed.board, { name: summary.name, createdAt: summary.createdAt });
     setSaveState("saved");
@@ -8149,13 +8171,14 @@ function App() {
                   <button type="button" className="sim-button mqtt-test" onClick={triggerSimulatedMqttMessage} disabled={!mqttPreviewTopic.trim()} title="Simuler la réception du message"><Play size={15} /><span>Recevoir</span></button>
                 </div>
               ) : null}
-              {hasWebServerGetEvent ? (
-                <div className="web-get-simulator" aria-label="Simuler une requête GET">
-                  <div className="web-get-simulator-title"><Server size={15} /><span>Requête GET reçue</span></div>
+              {hasWebServerRequestEvent ? (
+                <div className="web-request-simulator" aria-label={"Simuler une requête " + selectedWebPreviewMethod}>
+                  <div className="web-request-simulator-title"><Server size={15} /><span>Requête {selectedWebPreviewMethod} reçue</span></div>
+                  <label><span>Méthode</span><select value={selectedWebPreviewMethod} onChange={(event) => setWebPreviewMethod(event.target.value as WebRequestMethod)}><option value="GET" disabled={!hasWebServerGetEvent}>GET</option><option value="POST" disabled={!hasWebServerPostEvent}>POST</option></select></label>
                   <label><span>Serveur</span><select value={selectedWebPreviewServer?.referenceId ?? ""} onChange={(event) => setWebPreviewServerId(event.target.value)} disabled={webServers.length === 0}>{webServers.length === 0 ? <option value="">Aucun serveur</option> : null}{webServers.map((server) => <option value={server.referenceId} key={server.referenceId}>{server.name} · port {server.port}</option>)}</select></label>
-                  <label><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder="/api/bonjour" /></label>
-                  <label className="web-get-query-field"><span>Paramètres</span><input type="text" maxLength={1000} value={webPreviewQuery} onChange={(event) => setWebPreviewQuery(event.target.value)} placeholder="exemple=5&test=ok" /></label>
-                  <button type="button" className="sim-button web-get-test" onClick={triggerSimulatedWebGet} disabled={!selectedWebPreviewServer} title="Simuler la réception de la requête GET"><Play size={15} /><span>Recevoir GET</span></button>
+                  <label><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder={selectedWebPreviewMethod === "POST" ? "/api/message" : "/api/bonjour"} /></label>
+                  <label className="web-request-query-field"><span>Paramètres URL</span><input type="text" maxLength={1000} value={webPreviewQuery} onChange={(event) => setWebPreviewQuery(event.target.value)} placeholder="exemple=5&test=ok" /></label>
+                  <button type="button" className="sim-button web-request-test" onClick={triggerSimulatedWebRequest} disabled={!selectedWebPreviewServer} title={"Simuler la réception de la requête " + selectedWebPreviewMethod}><Play size={15} /><span>Recevoir {selectedWebPreviewMethod}</span></button>
                 </div>
               ) : null}
               <div className="minitel-frame">

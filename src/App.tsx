@@ -408,7 +408,7 @@ type SimulatedMqttMessage = {
   payload: string;
 };
 
-type WebRequestMethod = "GET" | "POST";
+type WebRequestMethod = "GET" | "POST" | "PUT";
 
 type SimulatedWebRequest = {
   method: WebRequestMethod;
@@ -600,9 +600,9 @@ function httpResponseMode(value: InputValue | undefined): HttpResponseMode {
   return requestedMode === "variable" || requestedMode === "structure" ? requestedMode : "text";
 }
 
-type PostBodyMode = "variable" | "structure";
+type WebBodyMode = "variable" | "structure";
 
-function postBodyMode(value: InputValue | undefined): PostBodyMode {
+function webBodyMode(value: InputValue | undefined): WebBodyMode {
   return textValue(value, "variable") === "structure" ? "structure" : "variable";
 }
 
@@ -1140,6 +1140,10 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "server", label: "serveur", type: "web-server", defaultValue: "", placeholder: "Serveur web" },
     { key: "path", label: "chemin", type: "text", defaultValue: "/api/message", placeholder: "/api/message" },
   ] },
+  { id: "event-web-server-put", title: "quand le serveur reçoit PUT", help: "Pile exécutée lorsqu'une requête PUT arrive sur le chemin choisi.", kind: "event", category: "start", color: "#ffb703", inputs: [
+    { key: "server", label: "serveur", type: "web-server", defaultValue: "", placeholder: "Serveur web" },
+    { key: "path", label: "chemin", type: "text", defaultValue: "/api/ressource", placeholder: "/api/ressource" },
+  ] },
   { id: "event-mqtt-message", title: "quand un message MQTT est reçu", help: "Pile exécutée à la réception d'un message MQTT. Laisse le topic vide pour accepter tous les messages.", kind: "event", category: "start", color: "#ffb703", inputs: [
     { key: "topic", label: "topic", type: "text", defaultValue: "minitel/messages", placeholder: "minitel/messages" },
     { key: "target", label: "message dans", type: "variable", defaultValue: "texte", variableType: "text" },
@@ -1269,7 +1273,15 @@ const blockDefinitions: BlockDefinition[] = [
     { key: "target", label: "body dans", type: "variable", defaultValue: "reponseJson", variableType: "text", hidden: true },
     { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
   ] },
-  { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET ou POST.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+  { id: "web-put-body-read", title: "lire le body PUT", help: "Lit le contenu reçu par une requête PUT. Conserve le body brut dans une variable Texte ou décode son JSON avec une structure de données.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+    { key: "mode", label: "destination", type: "select", defaultValue: "variable", options: [
+      { label: "Variable", value: "variable" },
+      { label: "Structure", value: "structure" },
+    ], hidden: true },
+    { key: "target", label: "body dans", type: "variable", defaultValue: "reponseJson", variableType: "text", hidden: true },
+    { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
+  ] },
+  { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET, POST ou PUT.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "status", label: "code", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
   ] },
   { id: "web-response-send", title: "envoyer une réponse HTTP", help: "Répond à la requête web avec un texte, une variable ou une structure convertie automatiquement en JSON.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
@@ -1576,7 +1588,7 @@ function normalizeImportedBlock(value: unknown): ProgramBlock | null {
           : normalizeImportedTextValueExpr(importedValue);
     });
   }
-  if ((definition.id === "json-structure-read" || definition.id === "web-post-body-read") && importedValues) {
+  if ((definition.id === "json-structure-read" || isWebBodyReaderDefinitionId(definition.id)) && importedValues) {
     Object.entries(importedValues).forEach(([key, importedValue]) => {
       if (key.startsWith(DATA_STRUCTURE_FIELD_TARGET_PREFIX) && key.length <= 220 && typeof importedValue === "string") {
         values[key] = importedValue.trim().slice(0, 64);
@@ -1757,7 +1769,7 @@ function repairDataStructureReferencesInBlocks(blocks: ProgramBlock[], structure
   const validIds = new Set(structures.map((structure) => structure.id));
   const fallbackId = structures[0]?.id ?? "";
   return blocks.map((block) => {
-    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read" || block.definitionId === "web-response-send" || block.definitionId === "web-post-body-read";
+    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read" || block.definitionId === "web-response-send" || isWebBodyReaderDefinitionId(block.definitionId);
     const requestedId = textValue(block.values.structureId, "");
     return {
       ...block,
@@ -2565,7 +2577,18 @@ function resolveWebServer(value: InputValue | undefined, servers: WebServerDescr
 function webRequestMethodForEvent(definitionId: string): WebRequestMethod | null {
   if (definitionId === "event-web-server-get") return "GET";
   if (definitionId === "event-web-server-post") return "POST";
+  if (definitionId === "event-web-server-put") return "PUT";
   return null;
+}
+
+function webBodyMethodForBlock(definitionId: string): WebRequestMethod | null {
+  if (definitionId === "web-post-body-read") return "POST";
+  if (definitionId === "web-put-body-read") return "PUT";
+  return null;
+}
+
+function isWebBodyReaderDefinitionId(definitionId: string) {
+  return webBodyMethodForBlock(definitionId) !== null;
 }
 
 function projectUsesBlock(stacks: ScriptStack[], definitionId: string) {
@@ -3065,19 +3088,21 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "}");
         break;
       }
-      case "web-post-body-read": {
+      case "web-post-body-read":
+      case "web-put-body-read": {
+        const bodyMethod = webBodyMethodForBlock(block.definitionId);
         const serverSymbol = context?.webRequestServerSymbol;
-        if (!serverSymbol || context?.webRequestMethod !== "POST") {
-          pushLine(lines, indent, "// La lecture du body doit être placée sous un départ POST.");
+        if (!serverSymbol || !bodyMethod || context?.webRequestMethod !== bodyMethod) {
+          pushLine(lines, indent, "// La lecture du body doit être placée sous un départ " + (bodyMethod ?? "POST ou PUT") + ".");
           break;
         }
-        const mode = postBodyMode(values.mode);
+        const mode = webBodyMode(values.mode);
         if (mode === "variable") {
           const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
           const requestedTarget = textValue(values.target, "reponseJson");
           const selectedTarget = textVariables.find((variable) => variable.name === requestedTarget) ?? textVariables[0];
           if (!selectedTarget) {
-            pushLine(lines, indent, "// Ajoute une variable Texte pour recevoir le body POST.");
+            pushLine(lines, indent, "// Ajoute une variable Texte pour recevoir le body " + bodyMethod + ".");
             break;
           }
           pushLine(lines, indent, sanitizeIdentifier(selectedTarget.name) + " = " + serverSymbol + "->arg(\"plain\");");
@@ -3085,11 +3110,11 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         }
         const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
         if (!structure) {
-          pushLine(lines, indent, "// Aucune structure de données sélectionnée pour le body POST.");
+          pushLine(lines, indent, "// Aucune structure de données sélectionnée pour le body " + bodyMethod + ".");
           break;
         }
         pushLine(lines, indent, "{");
-        pushLine(lines, indent + 2, "const String mbsPostBody = " + serverSymbol + "->arg(\"plain\");");
+        pushLine(lines, indent + 2, "const String mbsRequestBody = " + serverSymbol + "->arg(\"plain\");");
         structure.fields.forEach((field) => {
           const targetName = dataStructureTargetName(values[dataStructureFieldTargetKey(field.id)], field, variables);
           if (!targetName) {
@@ -3097,7 +3122,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
             return;
           }
           const reader = field.valueType === "number" || field.valueType === "boolean" ? "mbsJsonReadNumber" : "mbsJsonReadText";
-          pushLine(lines, indent + 2, reader + "(mbsPostBody, " + cppString(field.key) + ", " + sanitizeIdentifier(targetName) + ");");
+          pushLine(lines, indent + 2, reader + "(mbsRequestBody, " + cppString(field.key) + ", " + sanitizeIdentifier(targetName) + ");");
         });
         pushLine(lines, indent, "}");
         break;
@@ -3107,7 +3132,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseStatus = context?.webResponseStatusVariable;
         const responseStatusSet = context?.webResponseStatusSetVariable;
         if (!responseSent || !responseStatus || !responseStatusSet) {
-          pushLine(lines, indent, "// Ce bloc de code HTTP doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce bloc de code HTTP doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
@@ -3124,7 +3149,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseStatusSet = context?.webResponseStatusSetVariable;
         const serverSymbol = context?.webResponseServerSymbol;
         if (!responseSent || !responseStatus || !responseStatusSet || !serverSymbol) {
-          pushLine(lines, indent, "// Ce bloc de réponse HTTP doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce bloc de réponse HTTP doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         const mode = httpResponseMode(values.mode);
@@ -3175,7 +3200,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce bloc de réponse JSON doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce bloc de réponse JSON doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
@@ -3188,7 +3213,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetText(" + responseJson + ", String(" + exprCode(values.key, textExpr("message")) + "), String(" + exprCode(values.value, textExpr("")) + "));");
@@ -3198,7 +3223,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetNumber(" + responseJson + ", String(" + exprCode(values.key, textExpr("valeur")) + "), (double)(" + exprCode(values.value, num(0)) + "));");
@@ -3208,7 +3233,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetBool(" + responseJson + ", String(" + exprCode(values.key, textExpr("actif")) + "), (bool)(" + exprCode(values.value, boolExpr(false)) + "));");
@@ -3218,7 +3243,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseJson = context?.webResponseJsonVariable;
         const responseSent = context?.webResponseSentVariable;
         if (!responseJson || !responseSent) {
-          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce champ JSON doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") mbsJsonResponseSetRaw(" + responseJson + ", String(" + exprCode(values.key, textExpr("données")) + "), String(" + exprCode(values.value, textExpr("{}")) + "));");
@@ -3231,7 +3256,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         const responseStatusSet = context?.webResponseStatusSetVariable;
         const serverSymbol = context?.webResponseServerSymbol;
         if (!responseJson || !responseSent || !responseStatus || !responseStatusSet || !serverSymbol) {
-          pushLine(lines, indent, "// Ce bloc d'envoi JSON doit être placé sous un départ GET ou POST.");
+          pushLine(lines, indent, "// Ce bloc d'envoi JSON doit être placé sous un départ GET, POST ou PUT.");
           break;
         }
         pushLine(lines, indent, "if (!" + responseSent + ") {");
@@ -3395,7 +3420,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], da
   const webServerSymbols = Object.fromEntries(webServers.map((server, index) => [server.blockId, "mbsWebServer_" + index]));
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJsonResponse = JSON_RESPONSE_BLOCK_IDS.some((definitionId) => projectUsesBlock(stacks, definitionId));
-  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has", "json-structure-build", "json-structure-read", "web-post-body-read"].some((definitionId) => projectUsesBlock(stacks, definitionId));
+  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has", "json-structure-build", "json-structure-read", "web-post-body-read", "web-put-body-read"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
   const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerRequestStacks, dataStructures, jsonResponseEnabled: usesJsonResponse };
   const lines: string[] = [
@@ -4220,23 +4245,25 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
         applyDataStructureReadPreview(state, structure, String(state.variables[sourceVariable] ?? ""), values, context?.variables ?? []);
         break;
       }
-      case "web-post-body-read": {
-        if (context?.webRequestMethod !== "POST") {
-          state.messages.push("Body POST indisponible");
+      case "web-post-body-read":
+      case "web-put-body-read": {
+        const bodyMethod = webBodyMethodForBlock(block.definitionId);
+        if (!bodyMethod || context?.webRequestMethod !== bodyMethod) {
+          state.messages.push("Body " + (bodyMethod ?? "POST ou PUT") + " indisponible");
           break;
         }
-        const mode = postBodyMode(values.mode);
+        const mode = webBodyMode(values.mode);
         const body = context.webBody ?? "";
         if (mode === "variable") {
           const textVariables = (context.variables ?? []).filter((variable) => variableValueType(variable) === "text");
           const requestedTarget = textValue(values.target, "reponseJson");
           const selectedTarget = textVariables.find((variable) => variable.name === requestedTarget) ?? textVariables[0];
           if (!selectedTarget) {
-            state.messages.push("Ajoute une variable Texte pour le body POST");
+            state.messages.push("Ajoute une variable Texte pour le body " + bodyMethod);
             break;
           }
           state.variables[selectedTarget.name] = body;
-          state.messages.push("Body POST → " + selectedTarget.name);
+          state.messages.push("Body " + bodyMethod + " → " + selectedTarget.name);
           break;
         }
         const structure = resolveDataStructure(values.structureId, context.dataStructures ?? []);
@@ -5770,7 +5797,7 @@ function DataStructureBlockEditor({
   );
 }
 
-function PostBodyBlockEditor({
+function WebBodyBlockEditor({
   block,
   stackId,
   variables,
@@ -5783,7 +5810,8 @@ function PostBodyBlockEditor({
   structures: DataStructureDef[];
   onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
 }) {
-  const mode = postBodyMode(block.values.mode);
+  const bodyMethod = webBodyMethodForBlock(block.definitionId) ?? "POST";
+  const mode = webBodyMode(block.values.mode);
   const structure = resolveDataStructure(block.values.structureId, structures);
   const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
   const requestedTarget = textValue(block.values.target, "reponseJson");
@@ -5791,7 +5819,7 @@ function PostBodyBlockEditor({
 
   return (
     <div className="http-response-block-editor post-body-block-editor" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
-      <div className="http-response-mode-switch post-body-mode-switch" role="group" aria-label="Destination du body POST">
+      <div className="http-response-mode-switch post-body-mode-switch" role="group" aria-label={"Destination du body " + bodyMethod}>
         <button type="button" className={mode === "variable" ? "is-active" : ""} aria-pressed={mode === "variable"} onClick={() => onValueChange(stackId, block.id, "mode", "variable")}><Variable size={13} /><span>Variable</span></button>
         <button type="button" className={mode === "structure" ? "is-active" : ""} aria-pressed={mode === "structure"} onClick={() => onValueChange(stackId, block.id, "mode", "structure")}><Braces size={13} /><span>Structure</span></button>
       </div>
@@ -5799,14 +5827,14 @@ function PostBodyBlockEditor({
         {mode === "variable" ? (
           <label className="http-response-value-row">
             <span>body dans</span>
-            <select aria-label="Variable du body POST" value={selectedTarget} disabled={textVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, "target", event.target.value)}>
+            <select aria-label={"Variable du body " + bodyMethod} value={selectedTarget} disabled={textVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, "target", event.target.value)}>
               {textVariables.length === 0 ? <option value="">Aucune variable Texte</option> : textVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
             </select>
           </label>
         ) : (
           <div className="http-response-structure">
             <div className="data-structure-block-toolbar http-response-structure-toolbar">
-              <label><span>structure</span><select aria-label="Structure du body POST" value={structure?.id ?? ""} disabled={structures.length === 0} onChange={(event) => onValueChange(stackId, block.id, "structureId", event.target.value)}>
+              <label><span>structure</span><select aria-label={"Structure du body " + bodyMethod} value={structure?.id ?? ""} disabled={structures.length === 0} onChange={(event) => onValueChange(stackId, block.id, "structureId", event.target.value)}>
                 {structures.length === 0 ? <option value="">Aucune structure</option> : structures.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
               </select></label>
             </div>
@@ -5819,7 +5847,7 @@ function PostBodyBlockEditor({
                   return (
                     <div className="data-structure-block-field" key={field.id}>
                       <div className="data-structure-block-field-meta"><strong>{field.key}</strong><span>{dataStructureFieldTypeLabel(field.valueType)}</span></div>
-                      <label className="data-structure-block-target"><span>dans</span><select aria-label={"Variable du body pour " + field.key} value={targetName} disabled={compatibleVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, targetKey, event.target.value)}>
+                      <label className="data-structure-block-target"><span>dans</span><select aria-label={"Variable du body " + bodyMethod + " pour " + field.key} value={targetName} disabled={compatibleVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, targetKey, event.target.value)}>
                         {compatibleVariables.length === 0 ? <option value="">Aucune variable</option> : compatibleVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
                       </select></label>
                     </div>
@@ -6053,7 +6081,7 @@ function ProgramBlockView({
   const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
   const isWebServer = definition.id === "web-server-start";
   const isDataStructureBlock = definition.id === "json-structure-build" || definition.id === "json-structure-read";
-  const isPostBodyBlock = definition.id === "web-post-body-read";
+  const isWebBodyBlock = isWebBodyReaderDefinitionId(definition.id);
   const isHttpResponseBlock = definition.id === "web-response-send";
   const webServerRoutes = isWebServer ? parseWebServerRoutes(block.values.assets) : [];
   const webServerName = isWebServer
@@ -6139,7 +6167,7 @@ function ProgramBlockView({
             </div>
           ) : null}
           {isDataStructureBlock ? <DataStructureBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
-          {isPostBodyBlock ? <PostBodyBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
+          {isWebBodyBlock ? <WebBodyBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
           {isHttpResponseBlock ? <HttpResponseBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
           {isWebServer ? (
             <div className="web-server-block-summary">
@@ -6532,8 +6560,17 @@ function App() {
   const hasMqttMessageEvent = stacks.some((stack) => stack.event.definitionId === "event-mqtt-message");
   const hasWebServerGetEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-get");
   const hasWebServerPostEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-post");
-  const hasWebServerRequestEvent = hasWebServerGetEvent || hasWebServerPostEvent;
-  const selectedWebPreviewMethod: WebRequestMethod = webPreviewMethod === "POST" && hasWebServerPostEvent ? "POST" : hasWebServerGetEvent ? "GET" : "POST";
+  const hasWebServerPutEvent = stacks.some((stack) => stack.event.definitionId === "event-web-server-put");
+  const hasWebServerRequestEvent = hasWebServerGetEvent || hasWebServerPostEvent || hasWebServerPutEvent;
+  const selectedWebPreviewMethod: WebRequestMethod = webPreviewMethod === "GET" && hasWebServerGetEvent
+    ? "GET"
+    : webPreviewMethod === "POST" && hasWebServerPostEvent
+      ? "POST"
+      : webPreviewMethod === "PUT" && hasWebServerPutEvent
+        ? "PUT"
+        : hasWebServerGetEvent
+          ? "GET"
+          : hasWebServerPostEvent ? "POST" : "PUT";
   const generatedCode = useMemo(() => generateArduinoCode(stacks, variables, dataStructures, screenConfig, screens, projectFiles), [dataStructures, projectFiles, screenConfig, screens, stacks, variables]);
   const preview = useMemo(() => simulatePreview(stacks, variables, dataStructures, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebRequests, screenConfig, screens, simulationHttpResults), [dataStructures, screenConfig, screens, stacks, variables, previewKey, simTick, simulatedKeys, simulatedMqttMessages, simulatedWebRequests, simulationHttpResults]);
   const currentMetadata = useMemo<ProjectMetadata>(() => ({
@@ -7027,7 +7064,7 @@ function App() {
     const path = normalizeWebServerPath(webPreviewPath);
     const query = webPreviewQuery.trim().replace(/^\?/, "");
     const requestLabel = path + (query ? "?" + query : "");
-    const body = method === "POST" ? webPreviewBody : "";
+    const body = method === "POST" || method === "PUT" ? webPreviewBody : "";
     setRightTab("preview");
     setWebPreviewMethod(method);
     setWebPreviewServerId(selectedWebPreviewServer.referenceId);
@@ -7248,7 +7285,7 @@ function App() {
     if (definitionId === "http-put-json") block.values.url = testServer.endpoints.put;
     if (definitionId === "http-patch-json") block.values.url = testServer.endpoints.patch;
     if (definitionId === "http-delete-json") block.values.url = testServer.endpoints.delete;
-    if (definitionId === "json-structure-build" || definitionId === "json-structure-read" || definitionId === "web-response-send" || definitionId === "web-post-body-read") {
+    if (definitionId === "json-structure-build" || definitionId === "json-structure-read" || definitionId === "web-response-send" || isWebBodyReaderDefinitionId(definitionId)) {
       const structure = dataStructures[0];
       block.values.structureId = structure?.id ?? "";
       structure?.fields.forEach((field) => {
@@ -8328,11 +8365,11 @@ function App() {
               {hasWebServerRequestEvent ? (
                 <div className="web-request-simulator" aria-label={"Simuler une requête " + selectedWebPreviewMethod}>
                   <div className="web-request-simulator-title"><Server size={15} /><span>Requête {selectedWebPreviewMethod} reçue</span></div>
-                  <label><span>Méthode</span><select value={selectedWebPreviewMethod} onChange={(event) => setWebPreviewMethod(event.target.value as WebRequestMethod)}><option value="GET" disabled={!hasWebServerGetEvent}>GET</option><option value="POST" disabled={!hasWebServerPostEvent}>POST</option></select></label>
+                  <label><span>Méthode</span><select value={selectedWebPreviewMethod} onChange={(event) => setWebPreviewMethod(event.target.value as WebRequestMethod)}><option value="GET" disabled={!hasWebServerGetEvent}>GET</option><option value="POST" disabled={!hasWebServerPostEvent}>POST</option><option value="PUT" disabled={!hasWebServerPutEvent}>PUT</option></select></label>
                   <label><span>Serveur</span><select value={selectedWebPreviewServer?.referenceId ?? ""} onChange={(event) => setWebPreviewServerId(event.target.value)} disabled={webServers.length === 0}>{webServers.length === 0 ? <option value="">Aucun serveur</option> : null}{webServers.map((server) => <option value={server.referenceId} key={server.referenceId}>{server.name} · port {server.port}</option>)}</select></label>
-                  <label className="web-request-path-field"><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder={selectedWebPreviewMethod === "POST" ? "/api/message" : "/api/bonjour"} /></label>
+                  <label className="web-request-path-field"><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder={selectedWebPreviewMethod === "GET" ? "/api/bonjour" : selectedWebPreviewMethod === "POST" ? "/api/message" : "/api/ressource"} /></label>
                   <label className="web-request-query-field"><span>Paramètres URL</span><input type="text" maxLength={1000} value={webPreviewQuery} onChange={(event) => setWebPreviewQuery(event.target.value)} placeholder="exemple=5&test=ok" /></label>
-                  {selectedWebPreviewMethod === "POST" ? <label className="web-request-body-field"><span>Body JSON ou texte</span><textarea aria-label="Body POST" maxLength={8000} rows={3} value={webPreviewBody} onChange={(event) => setWebPreviewBody(event.target.value)} placeholder={'{"message":"Bonjour"}'} /></label> : null}
+                  {selectedWebPreviewMethod !== "GET" ? <label className="web-request-body-field"><span>Body JSON ou texte</span><textarea aria-label={"Body " + selectedWebPreviewMethod} maxLength={8000} rows={3} value={webPreviewBody} onChange={(event) => setWebPreviewBody(event.target.value)} placeholder={'{"message":"Bonjour"}'} /></label> : null}
                   <button type="button" className="sim-button web-request-test" onClick={triggerSimulatedWebRequest} disabled={!selectedWebPreviewServer} title={"Simuler la réception de la requête " + selectedWebPreviewMethod}><Play size={15} /><span>Recevoir {selectedWebPreviewMethod}</span></button>
                 </div>
               ) : null}

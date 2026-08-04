@@ -994,14 +994,16 @@ body,
 }
 
 [data-theme="dark"] .web-request-simulator input,
-[data-theme="dark"] .web-request-simulator select {
+[data-theme="dark"] .web-request-simulator select,
+[data-theme="dark"] .web-request-simulator textarea {
   border-color: #5a4943;
   background: #292525;
   color: #f5f0ee;
 }
 
 [data-theme="dark"] .web-request-simulator input:focus,
-[data-theme="dark"] .web-request-simulator select:focus {
+[data-theme="dark"] .web-request-simulator select:focus,
+[data-theme="dark"] .web-request-simulator textarea:focus {
   border-color: #e37d5c;
   box-shadow: 0 0 0 3px rgba(227, 125, 92, 0.14);
 }

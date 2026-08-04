@@ -415,6 +415,7 @@ type SimulatedWebRequest = {
   serverId: string;
   path: string;
   query: string;
+  body?: string;
 };
 
 type SimulatedJsonResponse = {
@@ -430,6 +431,8 @@ type SimulatedJsonResponse = {
 type PreviewExecutionContext = {
   webResponse?: SimulatedJsonResponse;
   webQuery?: Record<string, string>;
+  webRequestMethod?: WebRequestMethod;
+  webBody?: string;
   dataStructures?: DataStructureDef[];
   variables?: VariableDef[];
 };
@@ -478,6 +481,7 @@ type CodeContext = {
   webResponseStatusSetVariable?: string;
   webResponseServerSymbol?: string;
   webRequestServerSymbol?: string;
+  webRequestMethod?: WebRequestMethod;
   dataStructures?: DataStructureDef[];
   jsonResponseEnabled?: boolean;
 };
@@ -594,6 +598,12 @@ type HttpResponseMode = "text" | "variable" | "structure";
 function httpResponseMode(value: InputValue | undefined): HttpResponseMode {
   const requestedMode = textValue(value, "text");
   return requestedMode === "variable" || requestedMode === "structure" ? requestedMode : "text";
+}
+
+type PostBodyMode = "variable" | "structure";
+
+function postBodyMode(value: InputValue | undefined): PostBodyMode {
+  return textValue(value, "variable") === "structure" ? "structure" : "variable";
 }
 
 function dataStructureFieldExpression(value: InputValue | undefined, valueType: DataStructureFieldType, variables: VariableDef[]): Expr {
@@ -1251,6 +1261,14 @@ const blockDefinitions: BlockDefinition[] = [
   { id: "web-get-query-if", title: "si le paramètre GET existe", help: "Exécute les blocs internes uniquement lorsque la requête contient ce paramètre.", kind: "control", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "key", label: "paramètre", type: "text-value", defaultValue: textExpr("test") },
   ], slots: [{ key: "children", label: "alors" }] },
+  { id: "web-post-body-read", title: "lire le body POST", help: "Lit le contenu reçu par une requête POST. Conserve le body brut dans une variable Texte ou décode son JSON avec une structure de données.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
+    { key: "mode", label: "destination", type: "select", defaultValue: "variable", options: [
+      { label: "Variable", value: "variable" },
+      { label: "Structure", value: "structure" },
+    ], hidden: true },
+    { key: "target", label: "body dans", type: "variable", defaultValue: "reponseJson", variableType: "text", hidden: true },
+    { key: "structureId", label: "structure", type: "text", defaultValue: "", hidden: true },
+  ] },
   { id: "web-response-status", title: "définir le code HTTP", help: "Choisit le code de la réponse du serveur, par exemple 200, 201, 404 ou 500. Place ce bloc sous un départ GET ou POST.", kind: "action", category: "network", color: WEB_SERVER_BLOCK_COLOR, inputs: [
     { key: "status", label: "code", type: "number", defaultValue: num(200), min: 100, max: 599, compact: true },
   ] },
@@ -1558,7 +1576,7 @@ function normalizeImportedBlock(value: unknown): ProgramBlock | null {
           : normalizeImportedTextValueExpr(importedValue);
     });
   }
-  if (definition.id === "json-structure-read" && importedValues) {
+  if ((definition.id === "json-structure-read" || definition.id === "web-post-body-read") && importedValues) {
     Object.entries(importedValues).forEach(([key, importedValue]) => {
       if (key.startsWith(DATA_STRUCTURE_FIELD_TARGET_PREFIX) && key.length <= 220 && typeof importedValue === "string") {
         values[key] = importedValue.trim().slice(0, 64);
@@ -1739,7 +1757,7 @@ function repairDataStructureReferencesInBlocks(blocks: ProgramBlock[], structure
   const validIds = new Set(structures.map((structure) => structure.id));
   const fallbackId = structures[0]?.id ?? "";
   return blocks.map((block) => {
-    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read" || block.definitionId === "web-response-send";
+    const isStructureBlock = block.definitionId === "json-structure-build" || block.definitionId === "json-structure-read" || block.definitionId === "web-response-send" || block.definitionId === "web-post-body-read";
     const requestedId = textValue(block.values.structureId, "");
     return {
       ...block,
@@ -2845,7 +2863,7 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
         pushLine(lines, indent, "if (" + serverSymbol + " == nullptr) {");
         pushLine(lines, indent + 2, serverSymbol + " = new WebServer(" + port + ");");
         eventRoutes.forEach(({ method, path, stacks: routeStacks }) => {
-          const requestContext: CodeContext = { ...context, webRequestServerSymbol: serverSymbol };
+          const requestContext: CodeContext = { ...context, webRequestServerSymbol: serverSymbol, webRequestMethod: method };
           if (context?.jsonResponseEnabled) {
             requestContext.webResponseJsonVariable = "mbsWebResponseJson";
             requestContext.webResponseSentVariable = "mbsWebResponseSent";
@@ -3043,6 +3061,43 @@ function appendBlockCode(lines: string[], blocks: ProgramBlock[], indent: number
           }
           const reader = field.valueType === "number" || field.valueType === "boolean" ? "mbsJsonReadNumber" : "mbsJsonReadText";
           pushLine(lines, indent + 2, reader + "(mbsStructuredSource, " + cppString(field.key) + ", " + sanitizeIdentifier(targetName) + ");");
+        });
+        pushLine(lines, indent, "}");
+        break;
+      }
+      case "web-post-body-read": {
+        const serverSymbol = context?.webRequestServerSymbol;
+        if (!serverSymbol || context?.webRequestMethod !== "POST") {
+          pushLine(lines, indent, "// La lecture du body doit être placée sous un départ POST.");
+          break;
+        }
+        const mode = postBodyMode(values.mode);
+        if (mode === "variable") {
+          const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
+          const requestedTarget = textValue(values.target, "reponseJson");
+          const selectedTarget = textVariables.find((variable) => variable.name === requestedTarget) ?? textVariables[0];
+          if (!selectedTarget) {
+            pushLine(lines, indent, "// Ajoute une variable Texte pour recevoir le body POST.");
+            break;
+          }
+          pushLine(lines, indent, sanitizeIdentifier(selectedTarget.name) + " = " + serverSymbol + "->arg(\"plain\");");
+          break;
+        }
+        const structure = resolveDataStructure(values.structureId, context?.dataStructures ?? []);
+        if (!structure) {
+          pushLine(lines, indent, "// Aucune structure de données sélectionnée pour le body POST.");
+          break;
+        }
+        pushLine(lines, indent, "{");
+        pushLine(lines, indent + 2, "const String mbsPostBody = " + serverSymbol + "->arg(\"plain\");");
+        structure.fields.forEach((field) => {
+          const targetName = dataStructureTargetName(values[dataStructureFieldTargetKey(field.id)], field, variables);
+          if (!targetName) {
+            pushLine(lines, indent + 2, "// Aucun emplacement compatible pour " + field.key + ".");
+            return;
+          }
+          const reader = field.valueType === "number" || field.valueType === "boolean" ? "mbsJsonReadNumber" : "mbsJsonReadText";
+          pushLine(lines, indent + 2, reader + "(mbsPostBody, " + cppString(field.key) + ", " + sanitizeIdentifier(targetName) + ");");
         });
         pushLine(lines, indent, "}");
         break;
@@ -3340,7 +3395,7 @@ function generateArduinoCode(stacks: ScriptStack[], variables: VariableDef[], da
   const webServerSymbols = Object.fromEntries(webServers.map((server, index) => [server.blockId, "mbsWebServer_" + index]));
   const usesMqtt = mqttMessageStacks.length > 0 || projectUsesBlock(stacks, "mqtt-connect") || projectUsesBlock(stacks, "mqtt-subscribe") || projectUsesBlock(stacks, "mqtt-publish");
   const usesJsonResponse = JSON_RESPONSE_BLOCK_IDS.some((definitionId) => projectUsesBlock(stacks, definitionId));
-  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has", "json-structure-build", "json-structure-read"].some((definitionId) => projectUsesBlock(stacks, definitionId));
+  const usesJson = usesHttp || usesJsonResponse || ["json-read-text", "json-read-number", "json-if-has", "json-structure-build", "json-structure-read", "web-post-body-read"].some((definitionId) => projectUsesBlock(stacks, definitionId));
   const usesWifi = usesHttp || usesMqtt || usesWebServer || projectUsesBlock(stacks, "wifi-connect") || projectUsesBlock(stacks, "wifi-hotspot");
   const codeContext: CodeContext = { screens, colorEnabled: screenConfig.colorEnabled, projectFiles, webAssetSymbols, webServers, webServerSymbols, webServerRequestStacks, dataStructures, jsonResponseEnabled: usesJsonResponse };
   const lines: string[] = [
@@ -3803,6 +3858,41 @@ function parseSimulatedWebQuery(value: string) {
   return result;
 }
 
+function applyDataStructureReadPreview(state: PreviewState, structure: DataStructureDef, sourceText: string, values: Values, variables: VariableDef[]) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(sourceText) as unknown;
+  } catch {
+    state.messages.push("JSON invalide pour " + structure.name);
+    return;
+  }
+  const document = importedRecord(parsed);
+  if (!document) {
+    state.messages.push("Objet JSON attendu pour " + structure.name);
+    return;
+  }
+  let readFields = 0;
+  structure.fields.forEach((field) => {
+    const target = dataStructureTargetName(values[dataStructureFieldTargetKey(field.id)], field, variables);
+    if (!target) return;
+    const found = Object.prototype.hasOwnProperty.call(document, field.key);
+    const fieldValue = document[field.key];
+    if (field.valueType === "number") {
+      const numericValue = Number(fieldValue);
+      state.variables[target] = found && Number.isFinite(numericValue) ? Math.trunc(numericValue) : 0;
+    } else if (field.valueType === "boolean") {
+      const booleanNumber = fieldValue === true ? 1 : fieldValue === false ? 0 : Number(fieldValue);
+      state.variables[target] = found && Number.isFinite(booleanNumber) ? Math.trunc(booleanNumber) : 0;
+    } else if (field.valueType === "json") {
+      state.variables[target] = found ? JSON.stringify(fieldValue) : "";
+    } else {
+      state.variables[target] = found ? previewJsonText(fieldValue) : "";
+    }
+    if (found) readFields += 1;
+  });
+  state.messages.push(structure.name + " lue · " + readFields + "/" + structure.fields.length + " champs");
+}
+
 function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], previewKey: string, screens: MinitelScene[], httpResults: Record<string, SimulationHttpState>, depth = 0, context?: PreviewExecutionContext) {
   blocks.forEach((block) => {
     const values = block.values;
@@ -4127,38 +4217,34 @@ function applyBlocksPreview(state: PreviewState, blocks: ProgramBlock[], preview
           state.messages.push("Aucune structure de données");
           break;
         }
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(String(state.variables[sourceVariable] ?? "")) as unknown;
-        } catch {
-          state.messages.push("JSON invalide pour " + structure.name);
+        applyDataStructureReadPreview(state, structure, String(state.variables[sourceVariable] ?? ""), values, context?.variables ?? []);
+        break;
+      }
+      case "web-post-body-read": {
+        if (context?.webRequestMethod !== "POST") {
+          state.messages.push("Body POST indisponible");
           break;
         }
-        const document = importedRecord(parsed);
-        if (!document) {
-          state.messages.push("Objet JSON attendu pour " + structure.name);
-          break;
-        }
-        let readFields = 0;
-        structure.fields.forEach((field) => {
-          const target = dataStructureTargetName(values[dataStructureFieldTargetKey(field.id)], field, context?.variables ?? []);
-          if (!target) return;
-          const found = Object.prototype.hasOwnProperty.call(document, field.key);
-          const fieldValue = document[field.key];
-          if (field.valueType === "number") {
-            const numericValue = Number(fieldValue);
-            state.variables[target] = found && Number.isFinite(numericValue) ? Math.trunc(numericValue) : 0;
-          } else if (field.valueType === "boolean") {
-            const booleanNumber = fieldValue === true ? 1 : fieldValue === false ? 0 : Number(fieldValue);
-            state.variables[target] = found && Number.isFinite(booleanNumber) ? Math.trunc(booleanNumber) : 0;
-          } else if (field.valueType === "json") {
-            state.variables[target] = found ? JSON.stringify(fieldValue) : "";
-          } else {
-            state.variables[target] = found ? previewJsonText(fieldValue) : "";
+        const mode = postBodyMode(values.mode);
+        const body = context.webBody ?? "";
+        if (mode === "variable") {
+          const textVariables = (context.variables ?? []).filter((variable) => variableValueType(variable) === "text");
+          const requestedTarget = textValue(values.target, "reponseJson");
+          const selectedTarget = textVariables.find((variable) => variable.name === requestedTarget) ?? textVariables[0];
+          if (!selectedTarget) {
+            state.messages.push("Ajoute une variable Texte pour le body POST");
+            break;
           }
-          if (found) readFields += 1;
-        });
-        state.messages.push(structure.name + " lue · " + readFields + "/" + structure.fields.length + " champs");
+          state.variables[selectedTarget.name] = body;
+          state.messages.push("Body POST → " + selectedTarget.name);
+          break;
+        }
+        const structure = resolveDataStructure(values.structureId, context.dataStructures ?? []);
+        if (!structure) {
+          state.messages.push("Aucune structure de données");
+          break;
+        }
+        applyDataStructureReadPreview(state, structure, body, values, context.variables ?? []);
         break;
       }
       case "web-response-status": {
@@ -4422,7 +4508,7 @@ function simulatePreview(stacks: ScriptStack[], variables: VariableDef[], dataSt
     }
     let response: SimulatedJsonResponse = { body: {}, contentType: "json", textBody: "", statusCode: 200, statusSet: false, started: false, sent: false };
     matchingStacks.forEach((stack) => {
-      response = applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { ...baseContext, webResponse: response, webQuery: query }) ?? response;
+      response = applyBlocksPreview(state, stack.blocks, previewKey, screens, httpResults, 0, { ...baseContext, webResponse: response, webQuery: query, webRequestMethod: request.method, webBody: request.body ?? "" }) ?? response;
     });
     if (response.started || response.sent) {
       if (response.contentType === "text") {
@@ -5684,6 +5770,70 @@ function DataStructureBlockEditor({
   );
 }
 
+function PostBodyBlockEditor({
+  block,
+  stackId,
+  variables,
+  structures,
+  onValueChange,
+}: {
+  block: ProgramBlock;
+  stackId: string;
+  variables: VariableDef[];
+  structures: DataStructureDef[];
+  onValueChange: (stackId: string, blockId: string, key: string, value: InputValue) => void;
+}) {
+  const mode = postBodyMode(block.values.mode);
+  const structure = resolveDataStructure(block.values.structureId, structures);
+  const textVariables = variables.filter((variable) => variableValueType(variable) === "text");
+  const requestedTarget = textValue(block.values.target, "reponseJson");
+  const selectedTarget = textVariables.some((variable) => variable.name === requestedTarget) ? requestedTarget : textVariables[0]?.name ?? "";
+
+  return (
+    <div className="http-response-block-editor post-body-block-editor" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()}>
+      <div className="http-response-mode-switch post-body-mode-switch" role="group" aria-label="Destination du body POST">
+        <button type="button" className={mode === "variable" ? "is-active" : ""} aria-pressed={mode === "variable"} onClick={() => onValueChange(stackId, block.id, "mode", "variable")}><Variable size={13} /><span>Variable</span></button>
+        <button type="button" className={mode === "structure" ? "is-active" : ""} aria-pressed={mode === "structure"} onClick={() => onValueChange(stackId, block.id, "mode", "structure")}><Braces size={13} /><span>Structure</span></button>
+      </div>
+      <div className="http-response-content" key={mode}>
+        {mode === "variable" ? (
+          <label className="http-response-value-row">
+            <span>body dans</span>
+            <select aria-label="Variable du body POST" value={selectedTarget} disabled={textVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, "target", event.target.value)}>
+              {textVariables.length === 0 ? <option value="">Aucune variable Texte</option> : textVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+            </select>
+          </label>
+        ) : (
+          <div className="http-response-structure">
+            <div className="data-structure-block-toolbar http-response-structure-toolbar">
+              <label><span>structure</span><select aria-label="Structure du body POST" value={structure?.id ?? ""} disabled={structures.length === 0} onChange={(event) => onValueChange(stackId, block.id, "structureId", event.target.value)}>
+                {structures.length === 0 ? <option value="">Aucune structure</option> : structures.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+              </select></label>
+            </div>
+            {structure ? (
+              <div className="data-structure-block-fields">
+                {structure.fields.map((field) => {
+                  const targetKey = dataStructureFieldTargetKey(field.id);
+                  const compatibleVariables = variables.filter((variable) => variableValueType(variable) === dataStructureFieldVariableType(field));
+                  const targetName = dataStructureTargetName(block.values[targetKey], field, variables);
+                  return (
+                    <div className="data-structure-block-field" key={field.id}>
+                      <div className="data-structure-block-field-meta"><strong>{field.key}</strong><span>{dataStructureFieldTypeLabel(field.valueType)}</span></div>
+                      <label className="data-structure-block-target"><span>dans</span><select aria-label={"Variable du body pour " + field.key} value={targetName} disabled={compatibleVariables.length === 0} onChange={(event) => onValueChange(stackId, block.id, targetKey, event.target.value)}>
+                        {compatibleVariables.length === 0 ? <option value="">Aucune variable</option> : compatibleVariables.map((variable) => <option value={variable.name} key={variable.id}>{variable.name}</option>)}
+                      </select></label>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : <div className="data-structure-block-empty"><Braces size={15} /><span>Aucune structure</span></div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function HttpResponseBlockEditor({
   block,
   stackId,
@@ -5903,6 +6053,7 @@ function ProgramBlockView({
   const visibleInputs = definition.inputs?.filter((input) => !input.hidden) ?? [];
   const isWebServer = definition.id === "web-server-start";
   const isDataStructureBlock = definition.id === "json-structure-build" || definition.id === "json-structure-read";
+  const isPostBodyBlock = definition.id === "web-post-body-read";
   const isHttpResponseBlock = definition.id === "web-response-send";
   const webServerRoutes = isWebServer ? parseWebServerRoutes(block.values.assets) : [];
   const webServerName = isWebServer
@@ -5988,6 +6139,7 @@ function ProgramBlockView({
             </div>
           ) : null}
           {isDataStructureBlock ? <DataStructureBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
+          {isPostBodyBlock ? <PostBodyBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
           {isHttpResponseBlock ? <HttpResponseBlockEditor block={block} stackId={stackId} variables={variables} structures={dataStructures} onValueChange={onValueChange} /> : null}
           {isWebServer ? (
             <div className="web-server-block-summary">
@@ -6310,6 +6462,7 @@ function App() {
   const [webPreviewServerId, setWebPreviewServerId] = useState("");
   const [webPreviewPath, setWebPreviewPath] = useState("/api/bonjour");
   const [webPreviewQuery, setWebPreviewQuery] = useState("exemple=5&test=ok");
+  const [webPreviewBody, setWebPreviewBody] = useState('{"message":"Bonjour","valeur":5}');
   const [simulatedWebRequests, setSimulatedWebRequests] = useState<SimulatedWebRequest[]>([]);
   const [simulationHttpResults, setSimulationHttpResults] = useState<Record<string, SimulationHttpState>>({});
   const simulationHttpGenerationRef = useRef(0);
@@ -6874,12 +7027,13 @@ function App() {
     const path = normalizeWebServerPath(webPreviewPath);
     const query = webPreviewQuery.trim().replace(/^\?/, "");
     const requestLabel = path + (query ? "?" + query : "");
+    const body = method === "POST" ? webPreviewBody : "";
     setRightTab("preview");
     setWebPreviewMethod(method);
     setWebPreviewServerId(selectedWebPreviewServer.referenceId);
     setWebPreviewPath(path);
     setWebPreviewQuery(query);
-    setSimulatedWebRequests((current) => [...current.slice(-11), { method, serverId: selectedWebPreviewServer.referenceId, path, query }]);
+    setSimulatedWebRequests((current) => [...current.slice(-11), { method, serverId: selectedWebPreviewServer.referenceId, path, query, body }]);
     setSimTick((current) => current + 1);
     void refreshSimulationHttpResults(["event-setup", "event-loop", "event-web-server-" + method.toLowerCase()]);
     flashNotice(method + " " + requestLabel + " simulé");
@@ -7094,7 +7248,7 @@ function App() {
     if (definitionId === "http-put-json") block.values.url = testServer.endpoints.put;
     if (definitionId === "http-patch-json") block.values.url = testServer.endpoints.patch;
     if (definitionId === "http-delete-json") block.values.url = testServer.endpoints.delete;
-    if (definitionId === "json-structure-build" || definitionId === "json-structure-read" || definitionId === "web-response-send") {
+    if (definitionId === "json-structure-build" || definitionId === "json-structure-read" || definitionId === "web-response-send" || definitionId === "web-post-body-read") {
       const structure = dataStructures[0];
       block.values.structureId = structure?.id ?? "";
       structure?.fields.forEach((field) => {
@@ -7105,7 +7259,7 @@ function App() {
             undefined,
             field,
             variables,
-            [textValue(block.values.source, "reponseJson")],
+            definitionId === "json-structure-read" ? [textValue(block.values.source, "reponseJson")] : [],
           );
         }
       });
@@ -8176,8 +8330,9 @@ function App() {
                   <div className="web-request-simulator-title"><Server size={15} /><span>Requête {selectedWebPreviewMethod} reçue</span></div>
                   <label><span>Méthode</span><select value={selectedWebPreviewMethod} onChange={(event) => setWebPreviewMethod(event.target.value as WebRequestMethod)}><option value="GET" disabled={!hasWebServerGetEvent}>GET</option><option value="POST" disabled={!hasWebServerPostEvent}>POST</option></select></label>
                   <label><span>Serveur</span><select value={selectedWebPreviewServer?.referenceId ?? ""} onChange={(event) => setWebPreviewServerId(event.target.value)} disabled={webServers.length === 0}>{webServers.length === 0 ? <option value="">Aucun serveur</option> : null}{webServers.map((server) => <option value={server.referenceId} key={server.referenceId}>{server.name} · port {server.port}</option>)}</select></label>
-                  <label><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder={selectedWebPreviewMethod === "POST" ? "/api/message" : "/api/bonjour"} /></label>
+                  <label className="web-request-path-field"><span>Chemin</span><input type="text" maxLength={240} value={webPreviewPath} onChange={(event) => setWebPreviewPath(event.target.value)} onBlur={() => setWebPreviewPath(normalizeWebServerPath(webPreviewPath))} placeholder={selectedWebPreviewMethod === "POST" ? "/api/message" : "/api/bonjour"} /></label>
                   <label className="web-request-query-field"><span>Paramètres URL</span><input type="text" maxLength={1000} value={webPreviewQuery} onChange={(event) => setWebPreviewQuery(event.target.value)} placeholder="exemple=5&test=ok" /></label>
+                  {selectedWebPreviewMethod === "POST" ? <label className="web-request-body-field"><span>Body JSON ou texte</span><textarea aria-label="Body POST" maxLength={8000} rows={3} value={webPreviewBody} onChange={(event) => setWebPreviewBody(event.target.value)} placeholder={'{"message":"Bonjour"}'} /></label> : null}
                   <button type="button" className="sim-button web-request-test" onClick={triggerSimulatedWebRequest} disabled={!selectedWebPreviewServer} title={"Simuler la réception de la requête " + selectedWebPreviewMethod}><Play size={15} /><span>Recevoir {selectedWebPreviewMethod}</span></button>
                 </div>
               ) : null}
